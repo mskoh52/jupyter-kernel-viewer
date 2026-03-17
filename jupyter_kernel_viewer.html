@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Jupyter Kernel Viewer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --config-h: 60px;
+  --bg:        #1a1a1a;
+  --panel-bg:  #1e1e1e;
+  --input-bg:  #2a2a2a;
+  --border:    #333;
+  --border2:   #444;
+  --border3:   #555;
+  --text:      #e0e0e0;
+  --muted:     #666;
+  --muted2:    #888;
+  --ok-bg:     #1a2e1a;
+  --ok-fg:     #6bcb6b;
+  --err-bg:    #2e1a1a;
+  --err-fg:    #cb6b6b;
+  --ann-fg:    #a0c4ff;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:        #f5f5f5;
+    --panel-bg:  #ffffff;
+    --input-bg:  #eeeeee;
+    --border:    #ddd;
+    --border2:   #ccc;
+    --border3:   #bbb;
+    --text:      #1a1a1a;
+    --muted:     #999;
+    --muted2:    #777;
+    --ok-bg:     #e6f4e6;
+    --ok-fg:     #2a7a2a;
+    --err-bg:    #fde8e8;
+    --err-fg:    #b00020;
+    --ann-fg:    #1a5fb4;
+  }
+}
+html, body { height: 100%; }
+body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 1rem; display: flex; flex-direction: column; }
+#app { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+#config { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex-shrink: 0; }
+#config input { font-family: monospace; font-size: 13px; background: var(--input-bg); border: 0.5px solid var(--border2); color: var(--text); padding: 6px 10px; border-radius: 6px; outline: none; }
+#config input:focus { border-color: var(--muted2); }
+#url-i { flex: 1; min-width: 200px; }
+#kid-i { font-family: monospace; font-size: 13px; background: var(--input-bg); border: 0.5px solid var(--border2); color: var(--text); padding: 6px 10px; border-radius: 6px; outline: none; max-width: 220px; cursor: pointer; }
+#kid-i:focus { border-color: var(--muted2); }
+#config button { font-size: 13px; white-space: nowrap; background: var(--input-bg); border: 0.5px solid var(--border3); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+#config button:hover { background: var(--border); }
+#status { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--input-bg); color: var(--muted2); }
+#status.connected { background: var(--ok-bg); color: var(--ok-fg); }
+#status.error { background: var(--err-bg); color: var(--err-fg); }
+
+#workspace { display: flex; gap: 0; align-items: flex-start; flex: 1; }
+
+/* Resize handles */
+.resize-handle {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: sticky;
+  top: var(--config-h);
+  height: calc(100vh - var(--config-h));
+  z-index: 10;
+  transition: background 0.15s;
+}
+.resize-handle:hover, .resize-handle.dragging { background: var(--border2); }
+.resize-handle::after {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 100%;
+  margin: 0 auto;
+  background: var(--border);
+}
+
+#sidebar {
+  flex-basis: 10%;
+  flex-shrink: 0;
+  min-width: 80px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  position: sticky;
+  top: var(--config-h);
+  height: calc(100vh - var(--config-h));
+}
+#sidebar-empty { padding: 12px; font-size: 12px; color: var(--muted); text-align: center; }
+.hist-item { padding: 7px 10px; cursor: pointer; border-bottom: 0.5px solid var(--border); position: relative; }
+.hist-item:last-child { border-bottom: none; }
+.hist-item:hover { background: var(--input-bg); }
+.hist-item.active { background: var(--input-bg); border-left: 2px solid var(--text); padding-left: 8px; }
+.hist-num { font-size: 11px; color: var(--muted); font-family: monospace; margin-bottom: 2px; }
+.hist-code { font-size: 12px; font-family: monospace; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 18px; }
+.badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; float: right; margin-top: 1px; }
+.badge.err { background: var(--err-bg); color: var(--err-fg); }
+.badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.del-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 2px 4px; font-family: monospace; line-height: 1; }
+.del-btn:hover { color: var(--err-fg); }
+
+#output-panel {
+  flex-basis: 70%;
+  flex-shrink: 0;
+  min-width: 200px;
+  padding: 10px 14px;
+  background: var(--panel-bg);
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.out-block { font-family: monospace; font-size: 13px; white-space: pre-wrap; word-break: normal; overflow-x: auto; color: var(--text); }
+.out-block.empty { color: var(--muted); font-style: italic; font-family: system-ui, sans-serif; }
+.out-block img { max-width: 100%; display: block; }
+#out-placeholder { font-size: 13px; color: var(--muted); margin: auto; font-family: system-ui, sans-serif; font-style: italic; }
+
+/* Right panel with tabs */
+#right-panel {
+  flex-basis: 20%;
+  flex-shrink: 0;
+  min-width: 120px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  position: sticky;
+  top: var(--config-h);
+  height: calc(100vh - var(--config-h));
+}
+#tab-bar { display: flex; border-bottom: 0.5px solid var(--border); flex-shrink: 0; }
+.tab-btn { padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--muted2); background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -0.5px; font-family: system-ui, sans-serif; white-space: nowrap; }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--text); }
+.tab-btn:hover { color: var(--text); }
+.tab-count { font-size: 10px; margin-left: 4px; padding: 1px 5px; border-radius: 3px; background: var(--err-bg); color: var(--err-fg); display: none; }
+.tab-count.show { display: inline; }
+#tab-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+#tab-content.stderr { color: var(--err-fg); }
+.tb-block { margin-bottom: 10px; color: var(--err-fg); }
+/* Input tab content */
+#input-code { font-family: monospace; font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-all; }
+#input-placeholder { font-size: 12px; color: var(--muted); font-style: italic; }
+.annotation-input {
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+  background: var(--input-bg);
+  border: 0.5px solid var(--border3);
+  color: var(--text);
+  padding: 2px 6px;
+  border-radius: 4px;
+  outline: none;
+  width: calc(100% - 24px);
+  margin-bottom: 3px;
+}
+.annotation-input:focus { border-color: var(--muted2); }
+.hist-annotation { font-size: 11px; color: var(--ann-fg); font-family: system-ui, sans-serif; margin-bottom: 2px; }
+.hist-ts { font-size: 10px; color: var(--muted2); font-family: monospace; margin-top: 2px; }
+@keyframes jkv-spin { to { transform: rotate(360deg); } }
+.spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--muted); border-top-color: var(--text); border-radius: 50%; animation: jkv-spin 0.7s linear infinite; vertical-align: middle; }
+.out-spinner { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted2); font-family: system-ui, sans-serif; font-style: italic; padding: 4px 0; }
+.out-spinner .spinner { width: 12px; height: 12px; border-width: 2px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="config">
+    <input id="url-i" type="text" value="http://localhost:8888" placeholder="http://localhost:8888?token=…" onblur="fetchKernels()" />
+    <select id="kid-i"><option value="">— select kernel —</option></select>
+    <button onclick="connect()">Connect</button>
+    <button id="disc-btn" style="display:none" onclick="disconnect()">Disconnect</button>
+    <button id="undo-btn" style="display:none" onclick="applyUndo()">undo</button>
+    <span id="status">disconnected</span>
+  </div>
+
+  <div id="workspace">
+    <div id="sidebar">
+      <div id="sidebar-empty">no executions yet</div>
+    </div>
+
+    <div class="resize-handle" id="handle-left"></div>
+
+    <div id="output-panel">
+      <div id="out-placeholder">select an execution</div>
+    </div>
+
+    <div class="resize-handle" id="handle-right"></div>
+
+    <div id="right-panel">
+      <div id="tab-bar">
+        <button class="tab-btn active" id="tab-btn-input" onclick="switchTab('input')">input</button>
+        <button class="tab-btn" id="tab-btn-stderr" onclick="switchTab('stderr')">stderr <span class="tab-count" id="stderr-count"></span></button>
+        <button class="tab-btn" id="tab-btn-tb" onclick="switchTab('tb')">traceback <span class="tab-count" id="tb-count"></span></button>
+      </div>
+      <div id="tab-content">
+        <span id="input-placeholder" style="font-family:system-ui,sans-serif;font-style:italic">select an execution</span>
+        <div id="input-code" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let ws = null, cells = {}, order = [], selected = null, activeTab = 'input', undoSnapshot = null;
+let insertMode = false;
+
+// ── Resize logic ──────────────────────────────────────────────────────────────
+(function initResize() {
+  const sidebar     = document.getElementById('sidebar');
+  const outputPanel = document.getElementById('output-panel');
+  const rightPanel  = document.getElementById('right-panel');
+  const handleLeft  = document.getElementById('handle-left');
+  const handleRight = document.getElementById('handle-right');
+
+  const SIDEBAR_MIN = 80;
+  const OUTPUT_MIN  = 200;
+  const RIGHT_MIN   = 120;
+
+  function startDrag(e, onMove) {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.classList.add('dragging');
+    function move(ev) { onMove(ev.clientX); }
+    function up() {
+      handle.classList.remove('dragging');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    }
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
+  handleLeft.addEventListener('mousedown', function(e) {
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const outputRect  = outputPanel.getBoundingClientRect();
+    const totalWidth  = sidebarRect.width + outputRect.width;
+    startDrag(e, function(x) {
+      const workspace = document.getElementById('workspace');
+      const wsLeft = workspace.getBoundingClientRect().left;
+      let newSidebar = x - wsLeft;
+      newSidebar = Math.max(SIDEBAR_MIN, newSidebar);
+      let newOutput = totalWidth - newSidebar;
+      if (newOutput < OUTPUT_MIN) {
+        newOutput = OUTPUT_MIN;
+        newSidebar = totalWidth - OUTPUT_MIN;
+      }
+      sidebar.style.flexBasis = newSidebar + 'px';
+      outputPanel.style.flexBasis = newOutput + 'px';
+    });
+  });
+
+  handleRight.addEventListener('mousedown', function(e) {
+    const outputRect = outputPanel.getBoundingClientRect();
+    const rightRect  = rightPanel.getBoundingClientRect();
+    const totalWidth = outputRect.width + rightRect.width;
+    startDrag(e, function(x) {
+      const outputLeft = outputPanel.getBoundingClientRect().left;
+      let newOutput = x - outputLeft;
+      newOutput = Math.max(OUTPUT_MIN, newOutput);
+      let newRight = totalWidth - newOutput;
+      if (newRight < RIGHT_MIN) {
+        newRight = RIGHT_MIN;
+        newOutput = totalWidth - RIGHT_MIN;
+      }
+      outputPanel.style.flexBasis = newOutput + 'px';
+      rightPanel.style.flexBasis = newRight + 'px';
+    });
+  });
+})();
+
+// ── Config bar height measurement ─────────────────────────────────────────────
+(function measureConfigBar() {
+  const config = document.getElementById('config');
+  const rect = config.getBoundingClientRect();
+  // top of config + its height + gap (10px) + body padding (16px top already in rect.top)
+  const offset = Math.round(rect.bottom + 10);
+  document.documentElement.style.setProperty('--config-h', offset + 'px');
+})();
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+// Parse base URL and optional token from the URL field.
+// The user may write: http://localhost:8888?token=abc  or  http://localhost:8888/api/kernels?token=abc
+function parseUrl() {
+  const raw = document.getElementById('url-i').value.trim().replace(/\/$/, '');
+  const u = new URL(raw.includes('://') ? raw : 'http://' + raw);
+  const token = u.searchParams.get('token') || '';
+  // Strip everything from /api onwards so we always have the server root
+  const base = u.origin + u.pathname.replace(/\/api\/.*$/, '').replace(/\/$/, '');
+  return { base, token };
+}
+
+async function fetchKernels() {
+  const { base, token } = parseUrl();
+  const url = `${base}/api/kernels${token ? '?token=' + encodeURIComponent(token) : ''}`;
+  const sel = document.getElementById('kid-i');
+  sel.innerHTML = '<option value="">— loading… —</option>';
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(res.status);
+    const kernels = await res.json();
+    const prev = localStorage.getItem('jkv_kid') || '';
+    sel.innerHTML = '<option value="">— select kernel —</option>' +
+      kernels.map(k => {
+        const label = `${k.name} — ${k.id.slice(0, 8)}`;
+        const selected = k.id === prev ? ' selected' : '';
+        return `<option value="${k.id}"${selected}>${label}</option>`;
+      }).join('');
+  } catch(e) {
+    sel.innerHTML = '<option value="">— error fetching kernels —</option>';
+  }
+}
+
+function connect() {
+  const { base, token } = parseUrl();
+  const kid = document.getElementById('kid-i').value.trim();
+  if (!kid) { setStatus('select a kernel', 'error'); return; }
+  saveConfig();
+  disconnect();
+  const wsUrl = `${base.replace(/^http/, 'ws')}/api/kernels/${kid}/channels${token ? '?token=' + encodeURIComponent(token) : ''}`;
+  setStatus('connecting…', '');
+  try { ws = new WebSocket(wsUrl); } catch(e) { setStatus('invalid url', 'error'); return; }
+  ws.onopen  = () => { setStatus('connected', 'connected'); document.getElementById('disc-btn').style.display = ''; document.title = `Jupyter (${kid.slice(0, 8)})`; };
+  ws.onclose = () => { setStatus('disconnected', ''); document.getElementById('disc-btn').style.display = 'none'; document.title = 'Jupyter Kernel Viewer'; };
+  ws.onerror = () => setStatus('error', 'error');
+  ws.onmessage = (e) => handleMsg(JSON.parse(e.data));
+}
+
+function disconnect() { if (ws) { ws.close(); ws = null; } }
+
+function setStatus(t, cls) {
+  const el = document.getElementById('status');
+  el.textContent = t; el.className = cls;
+}
+
+function handleMsg(msg) {
+  const type    = msg.msg_type;
+  const pid     = msg.parent_header && msg.parent_header.msg_id;
+  const content = msg.content;
+
+  if (type === 'execute_input') {
+    const id = pid || msg.header.msg_id;
+    if (!cells[id]) {
+      cells[id] = { id, input: content.code, count: content.execution_count, outputs: [], stderr: [], tracebacks: [], hasError: false, annotation: '', ts: Date.now(), busy: true };
+      order.unshift(id);
+      selectCell(id);
+    }
+    renderSidebar();
+    return;
+  }
+
+  if (!pid || !cells[pid]) return;
+  const cell = cells[pid];
+
+  if (type === 'stream') {
+    if (content.name === 'stderr') {
+      cell.stderr.push(content.text);
+    } else {
+      cell.outputs.push({ type: 'stdout', text: content.text });
+    }
+  } else if (type === 'execute_result' || type === 'display_data') {
+    const img     = content.data['image/png'];
+    const html    = content.data['text/html'];
+    const plotly  = content.data['application/vnd.plotly.v1+json'];
+    const text    = content.data['text/plain'] || '';
+    cell.outputs.push({ type: 'result', text, html, img, plotly });
+  } else if (type === 'error') {
+    const tb = (content.traceback || []).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+    cell.tracebacks.push({ ename: content.ename, evalue: content.evalue, tb });
+    cell.hasError = true;
+  } else if (type === 'status') {
+    if (content.execution_state === 'idle') {
+      cell.busy = false;
+    }
+  } else { return; }
+
+  renderSidebar();
+  if (selected === pid) { renderOutput(); renderRightPanel(); }
+}
+
+function selectCell(id) {
+  selected = id;
+  insertMode = false;
+  renderSidebar();
+  renderOutput();
+  renderRightPanel();
+}
+
+function deleteCell(id) {
+  saveUndo();
+  const idx = order.indexOf(id);
+  order.splice(idx, 1);
+  delete cells[id];
+  if (selected === id) {
+    const next = order[idx] || order[idx - 1] || null;
+    selected = next;
+  }
+  insertMode = false;
+  renderSidebar();
+  renderOutput();
+  renderRightPanel();
+}
+
+function saveUndo() {
+  undoSnapshot = { cells: JSON.parse(JSON.stringify(cells)), order: [...order], selected };
+  updateUndoBtn();
+}
+
+function applyUndo() {
+  if (!undoSnapshot) return;
+  ({ cells, order, selected } = undoSnapshot);
+  undoSnapshot = null;
+  insertMode = false;
+  updateUndoBtn();
+  renderSidebar();
+  renderOutput();
+  renderRightPanel();
+}
+
+function updateUndoBtn() {
+  document.getElementById('undo-btn').style.display = undoSnapshot ? '' : 'none';
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  renderRightPanel();
+}
+
+function renderSidebar() {
+  const sb = document.getElementById('sidebar');
+  document.getElementById('sidebar-empty').style.display = order.length ? 'none' : '';
+  const existing = {};
+  sb.querySelectorAll('.hist-item').forEach(el => existing[el.dataset.id] = el);
+  order.forEach((id, i) => {
+    const cell = cells[id];
+    let el = existing[id];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'hist-item';
+      el.dataset.id = id;
+      el.onclick = () => selectCell(id);
+    }
+    el.className = 'hist-item' + (selected === id ? ' active' : '');
+
+    const badge = cell.busy
+      ? '<span class="spinner" title="executing…"></span>'
+      : (cell.outputs.length === 0 && cell.stderr.length === 0 && cell.tracebacks.length === 0 ? '' :
+          cell.hasError ? '<span class="badge err">err</span>' : '<span class="badge ok">ok</span>');
+
+    if (selected === id && insertMode) {
+      // Insert mode: show annotation input
+      el.innerHTML = `<input class="annotation-input" value="${esc(cell.annotation)}" placeholder="annotation…" /><div class="hist-code">${esc(cell.input.split('\n')[0])}</div><button class="del-btn" data-id="${esc(id)}" title="delete">×</button>`;
+      const ai = el.querySelector('.annotation-input');
+      ai.onclick = (e) => e.stopPropagation();
+      ai.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === 'Escape') {
+          cell.annotation = ai.value;
+          insertMode = false;
+          renderSidebar();
+          renderRightPanel();
+          e.preventDefault();
+        }
+      };
+      ai.onblur = () => {
+        cell.annotation = ai.value;
+        insertMode = false;
+        renderSidebar();
+        renderRightPanel();
+      };
+      setTimeout(() => ai.focus(), 0);
+    } else {
+      // Normal mode: show badge and annotation (no In[N])
+      const annotationHtml = cell.annotation
+        ? `<span class="hist-annotation">${esc(cell.annotation)}</span>`
+        : '';
+      const histNumContent = badge + annotationHtml;
+      const histNumHtml = histNumContent
+        ? `<div class="hist-num">${histNumContent}</div>`
+        : '';
+      const tsStr = new Date(cell.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      el.innerHTML = `${histNumHtml}<div class="hist-code">${esc(cell.input.split('\n')[0])}</div><div class="hist-ts">${tsStr}</div><button class="del-btn" data-id="${esc(id)}" title="delete">×</button>`;
+    }
+
+    el.querySelector('.del-btn').onclick = (e) => { e.stopPropagation(); deleteCell(id); };
+    if (i === 0) sb.insertBefore(el, sb.firstChild); else sb.appendChild(el);
+    delete existing[id];
+  });
+  Object.values(existing).forEach(el => el.remove());
+}
+
+function makeIframeSrcdoc(bodyHtml) {
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const bg = isDark ? '#1e1e1e' : '#ffffff';
+  const fg = isDark ? '#e0e0e0' : '#1a1a1a';
+  const dfBorder    = isDark ? '#444' : '#ccc';
+  const dfHeaderBg  = isDark ? '#2a2a2a' : '#f0f0f0';
+  const dfHeaderFg  = isDark ? '#aaa' : '#333';
+  const dfStripe    = isDark ? '#252525' : '#f9f9f9';
+  const dfHover     = isDark ? '#2a3050' : '#eef3ff';
+  const dfIndexFg   = isDark ? '#666' : '#999';
+  return `<!DOCTYPE html><html><head><style>
+    body { margin: 8px; background: ${bg}; color: ${fg}; font-family: system-ui, sans-serif; font-size: 13px; overflow-x: auto; overflow-y: hidden; }
+    table.dataframe { border-collapse: collapse; font-family: monospace; font-size: 12px; width: auto; }
+    table.dataframe th, table.dataframe td { border: 1px solid ${dfBorder}; padding: 4px 10px; text-align: right; white-space: nowrap; }
+    table.dataframe th { background: ${dfHeaderBg}; color: ${dfHeaderFg}; font-weight: 600; text-align: center; }
+    table.dataframe tr:nth-child(even) td { background: ${dfStripe}; }
+    table.dataframe tbody tr:hover td { background: ${dfHover}; }
+    table.dataframe th:first-child, table.dataframe td:first-child { text-align: left; color: ${dfIndexFg}; }
+  </style></head><body>${bodyHtml}</body></html>`;
+}
+
+function renderOutput() {
+  const panel       = document.getElementById('output-panel');
+  const placeholder = document.getElementById('out-placeholder');
+  panel.innerHTML   = '';
+  panel.appendChild(placeholder);
+  if (!selected || !cells[selected]) { placeholder.style.display = ''; return; }
+  placeholder.style.display = 'none';
+  const cell = cells[selected];
+  if (cell.outputs.length === 0 && cell.tracebacks.length === 0) {
+    if (!cell.busy) {
+      const b = document.createElement('div');
+      b.className = 'out-block empty'; b.textContent = 'no output';
+      panel.appendChild(b);
+    }
+    if (cell.busy) {
+      const s = document.createElement('div');
+      s.className = 'out-spinner';
+      s.innerHTML = '<span class="spinner"></span>executing…';
+      panel.appendChild(s);
+    }
+    return;
+  }
+  cell.outputs.forEach(o => {
+    const b = document.createElement('div');
+    b.className = 'out-block';
+    if (o.img) {
+      b.innerHTML = `<img src="data:image/png;base64,${o.img}" />`;
+    } else if (o.plotly) {
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const iframeBg = isDark ? '#1e1e1e' : '#ffffff';
+      const iframeFg = isDark ? '#e0e0e0' : '#1a1a1a';
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'width:100%;border:none;min-height:450px;';
+      iframe.srcdoc = `<!DOCTYPE html><html><head>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"><\/script>
+        <style>body{margin:0;background:${iframeBg};}</style></head>
+        <body><div id="p"></div>
+        <script>Plotly.newPlot('p',${JSON.stringify(o.plotly.data)},Object.assign({paper_bgcolor:'${iframeBg}',plot_bgcolor:'${iframeBg}',font:{color:'${iframeFg}'}},${JSON.stringify(o.plotly.layout||{})}))<\/script>
+        </body></html>`;
+      // auto-size iframe height to content after load
+      iframe.onload = () => {
+        try { iframe.style.height = iframe.contentDocument.documentElement.scrollHeight + 'px'; } catch(_) {}
+      };
+      b.appendChild(iframe);
+    } else if (o.html) {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'width:100%;border:none;min-height:100px;';
+      iframe.srcdoc = makeIframeSrcdoc(o.html);
+      iframe.onload = () => {
+        try { iframe.style.height = iframe.contentDocument.body.scrollHeight + 16 + 'px'; } catch(_) {}
+      };
+      b.appendChild(iframe);
+    } else {
+      b.textContent = o.text;
+    }
+    panel.appendChild(b);
+  });
+  cell.tracebacks.forEach(t => {
+    const b = document.createElement('div');
+    b.className = 'out-block';
+    b.style.color = 'var(--err-fg)';
+    b.textContent = `${t.ename}: ${t.evalue}`;
+    panel.appendChild(b);
+  });
+  if (cell.busy) {
+    const s = document.createElement('div');
+    s.className = 'out-spinner';
+    s.innerHTML = '<span class="spinner"></span>executing…';
+    panel.appendChild(s);
+  }
+}
+
+function renderRightPanel() {
+  const cell = selected && cells[selected];
+
+  // Update tab button labels and counts
+  const stderrCount = document.getElementById('stderr-count');
+  const tbCount     = document.getElementById('tb-count');
+  stderrCount.textContent = cell && cell.stderr.length ? cell.stderr.length : '';
+  stderrCount.className   = 'tab-count' + (cell && cell.stderr.length ? ' show' : '');
+  tbCount.textContent     = cell && cell.tracebacks.length ? cell.tracebacks.length : '';
+  tbCount.className       = 'tab-count' + (cell && cell.tracebacks.length ? ' show' : '');
+
+  // Input tab button always shows just 'input'
+  const inputBtn = document.getElementById('tab-btn-input');
+  inputBtn.textContent = 'input';
+
+  // Highlight active tab button
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.getElementById('tab-btn-' + activeTab);
+  if (activeBtn) activeBtn.classList.add('active');
+  // Re-append count spans that got wiped by textContent above
+  // (stderr and tb buttons use innerHTML-compatible approach — rebuild them)
+  document.getElementById('tab-btn-stderr').innerHTML = 'stderr <span class="tab-count' + (cell && cell.stderr.length ? ' show' : '') + '" id="stderr-count">' + (cell && cell.stderr.length ? cell.stderr.length : '') + '</span>';
+  document.getElementById('tab-btn-tb').innerHTML = 'traceback <span class="tab-count' + (cell && cell.tracebacks.length ? ' show' : '') + '" id="tb-count">' + (cell && cell.tracebacks.length ? cell.tracebacks.length : '') + '</span>';
+
+  // Render tab content
+  const content = document.getElementById('tab-content');
+  content.innerHTML = '';
+  content.className = '';
+
+  if (activeTab === 'input') {
+    if (!cell) {
+      content.innerHTML = '<span style="font-family:system-ui,sans-serif;font-style:italic;color:var(--muted)">select an execution</span>';
+    } else {
+      if (cell.annotation) {
+        const ann = document.createElement('div');
+        ann.style.cssText = 'font-size:12px;color:var(--ann-fg);font-family:system-ui,sans-serif;padding:0 0 6px 0;border-bottom:0.5px solid var(--border);margin-bottom:8px;';
+        ann.textContent = cell.annotation;
+        content.appendChild(ann);
+      }
+      const code = document.createElement('div');
+      code.style.cssText = 'font-family:monospace;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;';
+      code.textContent = cell.input;
+      content.appendChild(code);
+    }
+  } else if (activeTab === 'stderr') {
+    content.className = 'stderr';
+    if (!cell || !cell.stderr.length) {
+      content.innerHTML = '<span style="font-family:system-ui,sans-serif;font-style:italic;color:var(--muted)">none</span>';
+    } else {
+      content.textContent = cell.stderr.join('');
+    }
+  } else {
+    // traceback
+    if (!cell || !cell.tracebacks.length) {
+      content.innerHTML = '<span style="font-family:system-ui,sans-serif;font-style:italic;color:var(--muted)">none</span>';
+    } else {
+      cell.tracebacks.forEach(t => {
+        const d = document.createElement('div');
+        d.className  = 'tb-block';
+        d.textContent = `${t.ename}: ${t.evalue}\n${t.tb}`;
+        content.appendChild(d);
+      });
+    }
+  }
+}
+
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Keyboard navigation ───────────────────────────────────────────────────────
+let lastD = 0;
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT') return;
+  if (insertMode) return;
+  if (e.key === 'j') {
+    const idx = order.indexOf(selected);
+    if (idx < order.length - 1) selectCell(order[idx + 1]);
+  }
+  if (e.key === 'k') {
+    const idx = order.indexOf(selected);
+    if (idx > 0) selectCell(order[idx - 1]);
+  }
+  if (e.key === 'd') {
+    const now = Date.now();
+    if (now - lastD < 400 && selected) deleteCell(selected);
+    lastD = now;
+  }
+  if (e.key === 'z') applyUndo();
+  if (e.key === 'i') {
+    if (selected) {
+      insertMode = true;
+      renderSidebar();
+    }
+  }
+});
+
+// ── Config persistence ────────────────────────────────────────────────────────
+function saveConfig() {
+  localStorage.setItem('jkv_url', document.getElementById('url-i').value);
+  localStorage.setItem('jkv_kid', document.getElementById('kid-i').value);
+}
+(function loadConfig() {
+  const url = localStorage.getItem('jkv_url');
+  if (url) document.getElementById('url-i').value = url;
+
+  // If a token was passed via query param (?token=...), inject it and persist it
+  const hashToken = new URLSearchParams(location.search).get('token');
+  if (hashToken) {
+    const field = document.getElementById('url-i');
+    const base = field.value.trim()
+      .replace(/\/api\/.*$/, '')   // strip /api/... suffix
+      .replace(/\?.*$/, '')        // strip existing query string
+      .replace(/\/$/, '');         // strip trailing slash
+    const newUrl = base + '?token=' + hashToken;
+    field.value = newUrl;
+    localStorage.setItem('jkv_url', newUrl);  // persist immediately
+  }
+
+  if (document.getElementById('url-i').value) fetchKernels();
+})();
+
+// Initial render of right panel (empty state)
+renderRightPanel();
+</script>
+</body>
+</html>
