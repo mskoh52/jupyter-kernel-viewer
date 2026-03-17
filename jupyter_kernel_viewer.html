@@ -21,6 +21,10 @@
   --err-bg:    #2e1a1a;
   --err-fg:    #cb6b6b;
   --ann-fg:    #a0c4ff;
+  --danger-fg: #c0524a;
+  --danger-border: #6e302b;
+  --danger-hover-bg: #3a1e1c;
+  --danger-hover-fg: #d4706a;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -38,6 +42,10 @@
     --err-bg:    #fde8e8;
     --err-fg:    #b00020;
     --ann-fg:    #1a5fb4;
+    --danger-fg: #a33028;
+    --danger-border: #c0524a;
+    --danger-hover-bg: #fde8e8;
+    --danger-hover-fg: #8b1f18;
   }
 }
 html, body { height: 100%; }
@@ -54,6 +62,7 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
 #status { font-size: 12px; padding: 3px 8px; border-radius: 6px; background: var(--input-bg); color: var(--muted2); }
 #status.connected { background: var(--ok-bg); color: var(--ok-fg); }
 #status.error { background: var(--err-bg); color: var(--err-fg); }
+#kid-i:disabled { opacity: 0.45; cursor: not-allowed; }
 
 #workspace { display: flex; gap: 0; align-items: flex-start; flex: 1; }
 
@@ -79,19 +88,42 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
   background: var(--border);
 }
 
-#sidebar {
+#sidebar-wrap {
   flex-basis: 10%;
   flex-shrink: 0;
   min-width: 80px;
   border: 0.5px solid var(--border);
   border-radius: 10px;
-  overflow-y: auto;
   background: var(--panel-bg);
   position: sticky;
   top: var(--config-h);
   height: calc(100vh - var(--config-h));
+  display: flex;
+  flex-direction: column;
 }
+#sidebar { flex: 1; overflow-y: auto; }
 #sidebar-empty { padding: 12px; font-size: 12px; color: var(--muted); text-align: center; }
+#sidebar-toolbar {
+  flex-shrink: 0;
+  border-top: 0.5px solid var(--border);
+  display: flex;
+  gap: 4px;
+  padding: 5px 6px;
+}
+#sidebar-toolbar button {
+  font-size: 11px;
+  background: none;
+  border: 0.5px solid var(--border2);
+  color: var(--muted2);
+  padding: 3px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#sidebar-toolbar button:hover:not(:disabled) { background: var(--input-bg); color: var(--text); }
+#sidebar-toolbar button:disabled { opacity: 0.35; cursor: default; }
+#sb-clear-btn { color: var(--danger-fg) !important; border-color: var(--danger-border) !important; margin-left: auto; }
+#sb-clear-btn:hover:not(:disabled) { background: var(--danger-hover-bg) !important; color: var(--danger-hover-fg) !important; }
 .hist-item { padding: 7px 10px; cursor: pointer; border-bottom: 0.5px solid var(--border); position: relative; }
 .hist-item:last-child { border-bottom: none; }
 .hist-item:hover { background: var(--input-bg); }
@@ -101,6 +133,7 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
 .badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; float: right; margin-top: 1px; }
 .badge.err { background: var(--err-bg); color: var(--err-fg); }
 .badge.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.lock-icon { font-size: 10px; margin-right: 3px; }
 .del-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-size: 11px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 2px 4px; font-family: monospace; line-height: 1; }
 .del-btn:hover { color: var(--err-fg); }
 
@@ -153,7 +186,6 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
   color: var(--text);
 }
 #tab-content.stderr { color: var(--err-fg); }
-.tb-block { margin-bottom: 10px; color: var(--err-fg); }
 /* Input tab content */
 #input-code { font-family: monospace; font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-all; }
 #input-placeholder { font-size: 12px; color: var(--muted); font-style: italic; }
@@ -183,15 +215,21 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
   <div id="config">
     <input id="url-i" type="text" value="http://localhost:8888" placeholder="http://localhost:8888?token=…" onblur="fetchKernels()" />
     <select id="kid-i"><option value="">— select kernel —</option></select>
-    <button onclick="connect()">Connect</button>
-    <button id="disc-btn" style="display:none" onclick="disconnect()">Disconnect</button>
+    <button id="conn-btn" onclick="toggleConnect()">Connect</button>
     <button id="undo-btn" style="display:none" onclick="applyUndo()">undo</button>
     <span id="status">disconnected</span>
   </div>
 
   <div id="workspace">
-    <div id="sidebar">
-      <div id="sidebar-empty">no executions yet</div>
+    <div id="sidebar-wrap">
+      <div id="sidebar">
+        <div id="sidebar-empty">no executions yet</div>
+      </div>
+      <div id="sidebar-toolbar">
+        <button id="sb-lock-btn" onclick="if(selected) toggleLock(selected)" disabled>lock</button>
+        <button id="sb-del-btn" onclick="if(selected) deleteCell(selected)" disabled>delete</button>
+        <button id="sb-clear-btn" onclick="clearAll()">clear all</button>
+      </div>
     </div>
 
     <div class="resize-handle" id="handle-left"></div>
@@ -206,7 +244,6 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
       <div id="tab-bar">
         <button class="tab-btn active" id="tab-btn-input" onclick="switchTab('input')">input</button>
         <button class="tab-btn" id="tab-btn-stderr" onclick="switchTab('stderr')">stderr <span class="tab-count" id="stderr-count"></span></button>
-        <button class="tab-btn" id="tab-btn-tb" onclick="switchTab('tb')">traceback <span class="tab-count" id="tb-count"></span></button>
       </div>
       <div id="tab-content">
         <span id="input-placeholder" style="font-family:system-ui,sans-serif;font-style:italic">select an execution</span>
@@ -221,7 +258,7 @@ let insertMode = false;
 
 // ── Resize logic ──────────────────────────────────────────────────────────────
 (function initResize() {
-  const sidebar     = document.getElementById('sidebar');
+  const sidebar     = document.getElementById('sidebar-wrap');
   const outputPanel = document.getElementById('output-panel');
   const rightPanel  = document.getElementById('right-panel');
   const handleLeft  = document.getElementById('handle-left');
@@ -325,17 +362,24 @@ async function fetchKernels() {
   }
 }
 
-function connect() {
+function setConnectedUi(connected) {
+  document.getElementById('conn-btn').textContent = connected ? 'Disconnect' : 'Connect';
+  document.getElementById('kid-i').disabled = connected;
+  if (connected) document.title = `Jupyter (${document.getElementById('kid-i').value.slice(0, 8)})`;
+  else document.title = 'Jupyter Kernel Viewer';
+}
+
+function toggleConnect() {
+  if (ws) { disconnect(); return; }
   const { base, token } = parseUrl();
   const kid = document.getElementById('kid-i').value.trim();
   if (!kid) { setStatus('select a kernel', 'error'); return; }
   saveConfig();
-  disconnect();
   const wsUrl = `${base.replace(/^http/, 'ws')}/api/kernels/${kid}/channels${token ? '?token=' + encodeURIComponent(token) : ''}`;
   setStatus('connecting…', '');
   try { ws = new WebSocket(wsUrl); } catch(e) { setStatus('invalid url', 'error'); return; }
-  ws.onopen  = () => { setStatus('connected', 'connected'); document.getElementById('disc-btn').style.display = ''; document.title = `Jupyter (${kid.slice(0, 8)})`; };
-  ws.onclose = () => { setStatus('disconnected', ''); document.getElementById('disc-btn').style.display = 'none'; document.title = 'Jupyter Kernel Viewer'; };
+  ws.onopen  = () => { setStatus('connected', 'connected'); setConnectedUi(true); };
+  ws.onclose = () => { setStatus('disconnected', ''); setConnectedUi(false); };
   ws.onerror = () => setStatus('error', 'error');
   ws.onmessage = (e) => handleMsg(JSON.parse(e.data));
 }
@@ -401,6 +445,7 @@ function selectCell(id) {
 }
 
 function deleteCell(id) {
+  if (cells[id] && cells[id].locked) return;
   saveUndo();
   const idx = order.indexOf(id);
   order.splice(idx, 1);
@@ -409,6 +454,26 @@ function deleteCell(id) {
     const next = order[idx] || order[idx - 1] || null;
     selected = next;
   }
+  insertMode = false;
+  renderSidebar();
+  renderOutput();
+  renderRightPanel();
+}
+
+function toggleLock(id) {
+  if (!cells[id]) return;
+  cells[id].locked = !cells[id].locked;
+  renderSidebar();
+}
+
+function clearAll() {
+  saveUndo();
+  const toDelete = order.filter(id => !cells[id].locked && !cells[id].busy);
+  toDelete.forEach(id => {
+    order.splice(order.indexOf(id), 1);
+    delete cells[id];
+  });
+  if (selected && !cells[selected]) selected = order[0] || null;
   insertMode = false;
   renderSidebar();
   renderOutput();
@@ -461,9 +526,12 @@ function renderSidebar() {
       : (cell.outputs.length === 0 && cell.stderr.length === 0 && cell.tracebacks.length === 0 ? '' :
           cell.hasError ? '<span class="badge err">err</span>' : '<span class="badge ok">ok</span>');
 
+    const lockHtml = cell.locked ? '<span class="lock-icon">🔒</span>' : '';
+    const delBtnHtml = cell.locked ? '' : `<button class="del-btn" title="delete">×</button>`;
+
     if (selected === id && insertMode) {
       // Insert mode: show annotation input
-      el.innerHTML = `<input class="annotation-input" value="${esc(cell.annotation)}" placeholder="annotation…" /><div class="hist-code">${esc(cell.input.split('\n')[0])}</div><button class="del-btn" data-id="${esc(id)}" title="delete">×</button>`;
+      el.innerHTML = `<input class="annotation-input" value="${esc(cell.annotation)}" placeholder="annotation…" /><div class="hist-code">${lockHtml}${esc(cell.input.split('\n')[0])}</div>${delBtnHtml}`;
       const ai = el.querySelector('.annotation-input');
       ai.onclick = (e) => e.stopPropagation();
       ai.onkeydown = (e) => {
@@ -483,7 +551,7 @@ function renderSidebar() {
       };
       setTimeout(() => ai.focus(), 0);
     } else {
-      // Normal mode: show badge and annotation (no In[N])
+      // Normal mode: badge row only if there's something to show
       const annotationHtml = cell.annotation
         ? `<span class="hist-annotation">${esc(cell.annotation)}</span>`
         : '';
@@ -492,14 +560,22 @@ function renderSidebar() {
         ? `<div class="hist-num">${histNumContent}</div>`
         : '';
       const tsStr = new Date(cell.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-      el.innerHTML = `${histNumHtml}<div class="hist-code">${esc(cell.input.split('\n')[0])}</div><div class="hist-ts">${tsStr}</div><button class="del-btn" data-id="${esc(id)}" title="delete">×</button>`;
+      el.innerHTML = `${histNumHtml}<div class="hist-code">${lockHtml}${esc(cell.input.split('\n')[0])}</div><div class="hist-ts">${tsStr}</div>${delBtnHtml}`;
     }
 
-    el.querySelector('.del-btn').onclick = (e) => { e.stopPropagation(); deleteCell(id); };
+    if (!cell.locked) el.querySelector('.del-btn').onclick = (e) => { e.stopPropagation(); deleteCell(id); };
     if (i === 0) sb.insertBefore(el, sb.firstChild); else sb.appendChild(el);
     delete existing[id];
   });
   Object.values(existing).forEach(el => el.remove());
+
+  // Update toolbar button states
+  const cell = selected && cells[selected];
+  const lockBtn = document.getElementById('sb-lock-btn');
+  const delBtn  = document.getElementById('sb-del-btn');
+  lockBtn.disabled = !cell;
+  lockBtn.textContent = cell && cell.locked ? 'unlock' : 'lock';
+  delBtn.disabled = !cell || !!cell.locked || !!cell.busy;
 }
 
 function makeIframeSrcdoc(bodyHtml) {
@@ -584,7 +660,7 @@ function renderOutput() {
     const b = document.createElement('div');
     b.className = 'out-block';
     b.style.color = 'var(--err-fg)';
-    b.textContent = `${t.ename}: ${t.evalue}`;
+    b.textContent = t.tb ? `${t.ename}: ${t.evalue}\n${t.tb}` : `${t.ename}: ${t.evalue}`;
     panel.appendChild(b);
   });
   if (cell.busy) {
@@ -598,26 +674,13 @@ function renderOutput() {
 function renderRightPanel() {
   const cell = selected && cells[selected];
 
-  // Update tab button labels and counts
-  const stderrCount = document.getElementById('stderr-count');
-  const tbCount     = document.getElementById('tb-count');
-  stderrCount.textContent = cell && cell.stderr.length ? cell.stderr.length : '';
-  stderrCount.className   = 'tab-count' + (cell && cell.stderr.length ? ' show' : '');
-  tbCount.textContent     = cell && cell.tracebacks.length ? cell.tracebacks.length : '';
-  tbCount.className       = 'tab-count' + (cell && cell.tracebacks.length ? ' show' : '');
-
-  // Input tab button always shows just 'input'
-  const inputBtn = document.getElementById('tab-btn-input');
-  inputBtn.textContent = 'input';
+  // Update stderr tab count badge
+  document.getElementById('tab-btn-stderr').innerHTML = 'stderr <span class="tab-count' + (cell && cell.stderr.length ? ' show' : '') + '" id="stderr-count">' + (cell && cell.stderr.length ? cell.stderr.length : '') + '</span>';
 
   // Highlight active tab button
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   const activeBtn = document.getElementById('tab-btn-' + activeTab);
   if (activeBtn) activeBtn.classList.add('active');
-  // Re-append count spans that got wiped by textContent above
-  // (stderr and tb buttons use innerHTML-compatible approach — rebuild them)
-  document.getElementById('tab-btn-stderr').innerHTML = 'stderr <span class="tab-count' + (cell && cell.stderr.length ? ' show' : '') + '" id="stderr-count">' + (cell && cell.stderr.length ? cell.stderr.length : '') + '</span>';
-  document.getElementById('tab-btn-tb').innerHTML = 'traceback <span class="tab-count' + (cell && cell.tracebacks.length ? ' show' : '') + '" id="tb-count">' + (cell && cell.tracebacks.length ? cell.tracebacks.length : '') + '</span>';
 
   // Render tab content
   const content = document.getElementById('tab-content');
@@ -629,10 +692,10 @@ function renderRightPanel() {
       content.innerHTML = '<span style="font-family:system-ui,sans-serif;font-style:italic;color:var(--muted)">select an execution</span>';
     } else {
       if (cell.annotation) {
-        const ann = document.createElement('div');
-        ann.style.cssText = 'font-size:12px;color:var(--ann-fg);font-family:system-ui,sans-serif;padding:0 0 6px 0;border-bottom:0.5px solid var(--border);margin-bottom:8px;';
-        ann.textContent = cell.annotation;
-        content.appendChild(ann);
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'font-size:12px;color:var(--ann-fg);font-family:system-ui,sans-serif;padding:0 0 6px 0;border-bottom:0.5px solid var(--border);margin-bottom:8px;';
+        hdr.textContent = cell.annotation;
+        content.appendChild(hdr);
       }
       const code = document.createElement('div');
       code.style.cssText = 'font-family:monospace;font-size:12px;color:var(--text);white-space:pre-wrap;word-break:break-all;';
@@ -646,25 +709,12 @@ function renderRightPanel() {
     } else {
       content.textContent = cell.stderr.join('');
     }
-  } else {
-    // traceback
-    if (!cell || !cell.tracebacks.length) {
-      content.innerHTML = '<span style="font-family:system-ui,sans-serif;font-style:italic;color:var(--muted)">none</span>';
-    } else {
-      cell.tracebacks.forEach(t => {
-        const d = document.createElement('div');
-        d.className  = 'tb-block';
-        d.textContent = `${t.ename}: ${t.evalue}\n${t.tb}`;
-        content.appendChild(d);
-      });
-    }
   }
 }
 
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Keyboard navigation ───────────────────────────────────────────────────────
-let lastD = 0;
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT') return;
   if (insertMode) return;
@@ -676,12 +726,9 @@ document.addEventListener('keydown', function(e) {
     const idx = order.indexOf(selected);
     if (idx > 0) selectCell(order[idx - 1]);
   }
-  if (e.key === 'd') {
-    const now = Date.now();
-    if (now - lastD < 400 && selected) deleteCell(selected);
-    lastD = now;
-  }
+  if (e.key === 'x') { if (selected) deleteCell(selected); }
   if (e.key === 'z') applyUndo();
+  if (e.key === 'l') { if (selected) toggleLock(selected); }
   if (e.key === 'i') {
     if (selected) {
       insertMode = true;
