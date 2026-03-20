@@ -5,6 +5,8 @@ local kernel = require("jupyter.kernel")
 
 M.config = vim.deepcopy(config.defaults)
 
+local ns = vim.api.nvim_create_namespace("jupyter_execute_flash")
+
 local _registered_prefix = nil
 
 local function deep_merge(base, override)
@@ -164,8 +166,20 @@ function M.execute(code)
   kernel.execute(code)
 end
 
+local function flash_range(buf, start_pos, end_pos)
+  vim.highlight.range(buf, ns, "IncSearch", start_pos, end_pos)
+  vim.defer_fn(function()
+    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  end, 150)
+end
+
 function M.execute_line()
-  M.execute(vim.api.nvim_get_current_line())
+  local buf = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1] - 1
+  local line = vim.api.nvim_get_current_line()
+  flash_range(buf, {row, 0}, {row, #line})
+  M.execute(line)
 end
 
 function M.execute_visual()
@@ -182,6 +196,8 @@ function M.execute_visual()
     end
     lines[1] = lines[1]:sub(start_pos[2] + 1)
   end
+  local flash_end_col = end_pos[2] < 2147483647 and end_pos[2] or #vim.api.nvim_buf_get_lines(buf, end_pos[1] - 1, end_pos[1], false)[1]
+  flash_range(buf, {start_pos[1] - 1, start_pos[2]}, {end_pos[1] - 1, flash_end_col})
   M.execute(table.concat(lines, "\n"))
 end
 
@@ -195,6 +211,13 @@ function M.execute_operator(motion_type)
   if motion_type == "char" and #lines > 0 then
     lines[#lines] = lines[#lines]:sub(1, end_mark[2] + 1)
     lines[1] = lines[1]:sub(start_mark[2] + 1)
+  end
+
+  if motion_type == "char" then
+    flash_range(buf, {start_mark[1] - 1, start_mark[2]}, {end_mark[1] - 1, end_mark[2]})
+  else
+    local last_line = vim.api.nvim_buf_get_lines(buf, end_mark[1] - 1, end_mark[1], false)[1]
+    flash_range(buf, {start_mark[1] - 1, 0}, {end_mark[1] - 1, #last_line})
   end
 
   M.execute(table.concat(lines, "\n"))
