@@ -88,3 +88,17 @@ require("jupyter").setup({
 The last character of execute_prefix is used as the trigger key to run JupyterExecuteLine.
 
 Set `execute_prefix = false` to disable all execute keymaps and use only the commands.
+
+## Statusline
+
+`require("jupyter").statusline()` returns `"♃ <kernel-id>"` when connected, or `""` when disconnected. Add it to your statusline provider:
+
+**lualine:**
+```lua
+lualine_x = { require("jupyter").statusline }
+```
+
+**Raw statusline:**
+```lua
+vim.o.statusline = vim.o.statusline .. " %{v:lua.require('jupyter').statusline()}"
+```

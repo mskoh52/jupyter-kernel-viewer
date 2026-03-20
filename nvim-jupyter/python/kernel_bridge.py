@@ -7,6 +7,7 @@ Accepts either:
 """
 
 import sys
+import os
 import json
 import threading
 import queue
@@ -163,7 +164,11 @@ def main():
             except RuntimeError as e:
                 send({"type": "error", "message": f"Kernel not ready: {e}"})
                 sys.exit(1)
-            send({"type": "ready", "connection_file": arg})
+            kernel_id = None
+            basename = os.path.basename(arg)
+            if basename.startswith("kernel-") and basename.endswith(".json"):
+                kernel_id = basename[7:-5]
+            send({"type": "ready", "connection_file": arg, "kernel_id": kernel_id})
         else:
             send({"type": "error", "message": "No connection argument provided. Pass a server URL (http://...) or connection file path."})
             sys.exit(1)

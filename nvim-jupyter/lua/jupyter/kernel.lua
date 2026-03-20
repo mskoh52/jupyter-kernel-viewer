@@ -2,6 +2,7 @@
 local M = {}
 
 M._job_id = nil
+M._kernel_id = nil
 M._callbacks = {}  -- req_id -> callback function
 M._ready_cb = nil
 M._buf = ""        -- partial line buffer
@@ -71,6 +72,7 @@ end
 
 local function on_exit(_, code, _)
   M._job_id = nil
+  M._kernel_id = nil
   M._callbacks = {}
   M._buf = ""
   if code ~= 0 then
@@ -114,6 +116,7 @@ function M.stop()
   vim.fn.chansend(M._job_id, vim.fn.json_encode({ type = "shutdown" }) .. "\n")
   vim.fn.jobstop(M._job_id)
   M._job_id = nil
+  M._kernel_id = nil
   M._callbacks = {}
 end
 

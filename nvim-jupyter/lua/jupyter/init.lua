@@ -91,6 +91,7 @@ end
 
 local function on_ready_handler(msg)
   if msg.type == "ready" then
+    kernel._kernel_id = msg.kernel_id
     vim.notify("Jupyter: connected" .. (msg.kernel_id and (" [" .. msg.kernel_id:sub(1,8) .. "]") or ""))
   elseif msg.type == "kernel_list" then
     local kernels = msg.kernels
@@ -226,6 +227,17 @@ end
 function M.interrupt()
   kernel.interrupt()
   vim.notify("Jupyter: interrupt sent")
+end
+
+function M.statusline()
+  if not kernel.is_running() then
+    return ""
+  end
+  local id = kernel._kernel_id
+  if id then
+    return "♃ " .. id:sub(1, 8)
+  end
+  return "♃"
 end
 
 return M
