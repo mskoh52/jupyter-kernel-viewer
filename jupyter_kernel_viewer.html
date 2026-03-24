@@ -208,6 +208,60 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
 .spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--muted); border-top-color: var(--text); border-radius: 50%; animation: jkv-spin 0.7s linear infinite; vertical-align: middle; }
 .out-spinner { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted2); font-family: system-ui, sans-serif; font-style: italic; padding: 4px 0; }
 .out-spinner .spinner { width: 12px; height: 12px; border-width: 2px; }
+
+/* ── Confirmation dialog ───────────────────────────────────────────────────── */
+#confirm-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+#confirm-overlay.visible { display: flex; }
+#confirm-dialog {
+  background: var(--panel-bg);
+  border: 0.5px solid var(--border2);
+  border-radius: 10px;
+  padding: 20px 24px;
+  min-width: 260px;
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+#confirm-dialog p {
+  font-size: 13px;
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  line-height: 1.4;
+}
+#confirm-dialog .confirm-btns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+#confirm-dialog .confirm-btns button {
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: system-ui, sans-serif;
+}
+#confirm-cancel-btn {
+  background: var(--input-bg);
+  border: 0.5px solid var(--border2);
+  color: var(--text);
+}
+#confirm-cancel-btn:hover { background: var(--border); }
+#confirm-ok-btn {
+  background: var(--danger-hover-bg);
+  border: 0.5px solid var(--danger-border);
+  color: var(--danger-fg);
+}
+#confirm-ok-btn:hover { background: var(--danger-hover-bg); color: var(--danger-hover-fg); }
 </style>
 </head>
 <body>
@@ -228,7 +282,7 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--t
       <div id="sidebar-toolbar">
         <button id="sb-lock-btn" onclick="if(selected) toggleLock(selected)" disabled>lock</button>
         <button id="sb-del-btn" onclick="if(selected) deleteCell(selected)" disabled>delete</button>
-        <button id="sb-clear-btn" onclick="clearAll()">clear all</button>
+        <button id="sb-clear-btn" onclick="showClearConfirm()">clear all</button>
       </div>
     </div>
 
@@ -718,6 +772,8 @@ function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT') return;
   if (insertMode) return;
+  const overlay = document.getElementById('confirm-overlay');
+  if (overlay && overlay.classList.contains('visible')) return;
   if (e.key === 'j') {
     const idx = order.indexOf(selected);
     if (idx < order.length - 1) selectCell(order[idx + 1]);
@@ -727,6 +783,7 @@ document.addEventListener('keydown', function(e) {
     if (idx > 0) selectCell(order[idx - 1]);
   }
   if (e.key === 'x') { if (selected) deleteCell(selected); }
+  if (e.key === 'X') showClearConfirm();
   if (e.key === 'z') applyUndo();
   if (e.key === 'l') { if (selected) toggleLock(selected); }
   if (e.key === 'i') {
@@ -764,6 +821,48 @@ function saveConfig() {
 
 // Initial render of right panel (empty state)
 renderRightPanel();
+</script>
+
+<div id="confirm-overlay">
+  <div id="confirm-dialog">
+    <p>Clear all unlocked cells?</p>
+    <div class="confirm-btns">
+      <button id="confirm-cancel-btn" onclick="hideClearConfirm()">Cancel</button>
+      <button id="confirm-ok-btn" onclick="hideClearConfirm(); clearAll()">Confirm</button>
+    </div>
+  </div>
+</div>
+<script>
+function showClearConfirm() {
+  const overlay = document.getElementById('confirm-overlay');
+  overlay.classList.add('visible');
+  function onKey(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      hideClearConfirm();
+      clearAll();
+      document.removeEventListener('keydown', onKey, true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      hideClearConfirm();
+      document.removeEventListener('keydown', onKey, true);
+    }
+  }
+  overlay._keyHandler = onKey;
+  document.addEventListener('keydown', onKey, true);
+}
+function hideClearConfirm() {
+  const overlay = document.getElementById('confirm-overlay');
+  overlay.classList.remove('visible');
+  if (overlay._keyHandler) {
+    document.removeEventListener('keydown', overlay._keyHandler, true);
+    overlay._keyHandler = null;
+  }
+}
+// Close on backdrop click
+document.getElementById('confirm-overlay').addEventListener('click', function(e) {
+  if (e.target === this) hideClearConfirm();
+});
 </script>
 </body>
 </html>
