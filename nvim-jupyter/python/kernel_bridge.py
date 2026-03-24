@@ -231,6 +231,14 @@ def main():
             except Exception as e:
                 send({"type": "error", "message": f"Interrupt failed: {e}"})
 
+        elif cmd_type == "restart":
+            try:
+                client.shutdown(restart=True)
+                client.wait_for_ready(timeout=30)
+                send({"type": "restarted"})
+            except Exception as e:
+                send({"type": "error", "message": f"Restart failed: {e}"})
+
         elif cmd_type == "shutdown":
             shutdown_event.set()
             try:

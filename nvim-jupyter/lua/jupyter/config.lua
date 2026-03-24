@@ -7,6 +7,7 @@ M.defaults = {
     interrupt      = "<leader>ji",
     connect        = "<leader>jc",
     disconnect     = "<leader>jC",
+    restart        = "<leader>jr",
   },
 }
 

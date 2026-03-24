@@ -36,6 +36,14 @@ local function dispatch(msg)
     return
   end
 
+  if msg_type == "restarted" then
+    if M._on_restarted then
+      M._on_restarted(msg)
+      M._on_restarted = nil
+    end
+    return
+  end
+
   if id and M._callbacks[id] then
     M._callbacks[id](msg)
     if msg_type == "status" and msg.execution_state == "idle" then
@@ -123,6 +131,14 @@ end
 function M.interrupt()
   if not M.is_running() then return end
   vim.fn.chansend(M._job_id, vim.fn.json_encode({ type = "interrupt" }) .. "\n")
+end
+
+function M.restart(on_restarted)
+  if not M.is_running() then return end
+  if on_restarted then
+    M._on_restarted = on_restarted
+  end
+  vim.fn.chansend(M._job_id, vim.fn.json_encode({ type = "restart" }) .. "\n")
 end
 
 function M.send_raw(data)

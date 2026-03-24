@@ -66,6 +66,9 @@ function M.setup(user_config)
   if maps.disconnect then
     vim.keymap.set("n", maps.disconnect, M.disconnect, { desc = "Jupyter: disconnect from kernel" })
   end
+  if maps.restart then
+    vim.keymap.set("n", maps.restart, M.restart, { desc = "Jupyter: restart kernel" })
+  end
 
   vim.api.nvim_create_user_command("JupyterConnect", function(cmd_opts)
     local arg = cmd_opts.args ~= "" and cmd_opts.args or nil
@@ -87,6 +90,10 @@ function M.setup(user_config)
   vim.api.nvim_create_user_command("JupyterInterrupt", function(_)
     M.interrupt()
   end, { desc = "Interrupt Jupyter kernel" })
+
+  vim.api.nvim_create_user_command("JupyterRestart", function(_)
+    M.restart()
+  end, { desc = "Restart Jupyter kernel" })
 end
 
 local function on_ready_handler(msg)
@@ -227,6 +234,19 @@ end
 function M.interrupt()
   kernel.interrupt()
   vim.notify("Jupyter: interrupt sent")
+end
+
+function M.restart()
+  if not kernel.is_running() then
+    vim.notify("Jupyter: kernel not running", vim.log.levels.WARN)
+    return
+  end
+  vim.notify("Jupyter: restarting kernel...")
+  kernel.restart(function(_)
+    vim.schedule(function()
+      vim.notify("Jupyter: kernel restarted")
+    end)
+  end)
 end
 
 function M.statusline()
