@@ -8,6 +8,7 @@ M.defaults = {
     connect        = "<leader>jc",
     disconnect     = "<leader>jC",
     restart        = "<leader>jr",
+    manager        = "<leader>jm",
   },
 }
 

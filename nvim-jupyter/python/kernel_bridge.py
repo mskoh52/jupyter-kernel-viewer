@@ -103,7 +103,7 @@ def connect_via_url(arg):
         sys.exit(1)
 
     send({"type": "ready", "connection_file": cf, "kernel_id": kernel_id})
-    return client, None
+    return client, None, base, token, kernel_id
 
 
 def run_iopub_listener(client, callbacks, callbacks_lock, shutdown_event):
@@ -154,8 +154,10 @@ def main():
 
     try:
         if arg and (arg.startswith("http://") or arg.startswith("https://")):
-            client, km = connect_via_url(arg)
+            client, km, base, token, kernel_id = connect_via_url(arg)
         elif arg:
+            base = None
+            token = None
             client = jupyter_client.BlockingKernelClient(connection_file=arg)
             client.load_connection_file()
             client.start_channels()
@@ -226,8 +228,16 @@ def main():
             try:
                 if km:
                     km.interrupt_kernel()
+                elif base and kernel_id:
+                    url = f"{base}/api/kernels/{urllib.parse.quote(kernel_id)}/interrupt"
+                    if token:
+                        url += f"?token={urllib.parse.quote(token)}"
+                    req = urllib.request.Request(url, data=b"", method="POST")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        pass
                 else:
-                    client.interrupt_kernel()
+                    msg = client.session.msg('interrupt_request', content={})
+                    client.control_channel.send(msg)
             except Exception as e:
                 send({"type": "error", "message": f"Interrupt failed: {e}"})
 
