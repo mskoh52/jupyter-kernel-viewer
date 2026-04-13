@@ -10,7 +10,7 @@ M._host = nil
 M._port = nil
 M._base_path = nil
 M._token = nil
-M._line_offset = 3  -- 0-indexed line where kernel list starts (after header lines)
+M._line_offset = 2  -- 0-indexed line where kernel list starts (after header lines)
 
 local alias_file = vim.fn.stdpath("data") .. "/jupyter_kernel_aliases.json"
 
@@ -456,5 +456,17 @@ end
 function M.is_open()
   return M._win ~= nil and vim.api.nvim_win_is_valid(M._win)
 end
+
+-- Exported for testing only
+M._testing = {
+  parse_url    = parse_url,
+  render_lines = render_lines,
+  http_request = http_request,
+  api_list     = api_list,
+  api_kill     = api_kill,
+  api_start    = api_start,
+  api_restart  = api_restart,
+  api_interrupt = api_interrupt,
+}
 
 return M
