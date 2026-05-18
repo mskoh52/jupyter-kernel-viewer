@@ -224,31 +224,6 @@ def main():
             except queue.Empty:
                 send({"type": "complete_reply", "id": req_id, "matches": [], "cursor_start": cursor_pos, "cursor_end": cursor_pos})
 
-        elif cmd_type == "interrupt":
-            try:
-                if km:
-                    km.interrupt_kernel()
-                elif base and kernel_id:
-                    url = f"{base}/api/kernels/{urllib.parse.quote(kernel_id)}/interrupt"
-                    if token:
-                        url += f"?token={urllib.parse.quote(token)}"
-                    req = urllib.request.Request(url, data=b"", method="POST")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        pass
-                else:
-                    msg = client.session.msg('interrupt_request', content={})
-                    client.control_channel.send(msg)
-            except Exception as e:
-                send({"type": "error", "message": f"Interrupt failed: {e}"})
-
-        elif cmd_type == "restart":
-            try:
-                client.shutdown(restart=True)
-                client.wait_for_ready(timeout=30)
-                send({"type": "restarted"})
-            except Exception as e:
-                send({"type": "error", "message": f"Restart failed: {e}"})
-
         elif cmd_type == "shutdown":
             shutdown_event.set()
             try:

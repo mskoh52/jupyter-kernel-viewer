@@ -5,8 +5,6 @@ local kernel = require("jupyter.kernel")
 
 M.config = vim.deepcopy(config.defaults)
 
-M._last_server_url = nil
-
 local ns = vim.api.nvim_create_namespace("jupyter_execute_flash")
 
 local _registered_prefix = nil
@@ -26,9 +24,7 @@ end
 function M.setup(user_config)
   user_config = user_config or {}
   M.config = deep_merge(config.defaults, user_config)
-
   local manager = require("jupyter.manager")
-  manager._python_path = M.config.python_path
 
   local maps = M.config.mappings
   local p = maps.execute_prefix
@@ -133,7 +129,6 @@ end
 
 function M.connect(arg)
   if arg then
-    M._last_server_url = arg
     kernel.start({
       connection_arg = arg,
       python_path = M.config.python_path,
@@ -157,7 +152,6 @@ function M.connect(arg)
     if choice == "Enter manually..." then
       vim.ui.input({ prompt = "Server URL or connection file: " }, function(input)
         if input and input ~= "" then
-          M._last_server_url = input
           kernel.start({
             connection_arg = input,
             python_path = M.config.python_path,
@@ -166,7 +160,6 @@ function M.connect(arg)
         end
       end)
     else
-      M._last_server_url = choice
       kernel.start({
         connection_arg = choice,
         python_path = M.config.python_path,
@@ -251,6 +244,10 @@ function M.interrupt()
   vim.notify("Jupyter: interrupt sent")
 end
 
+function M.manager_open()
+  require("jupyter.manager").open()
+end
+
 function M.restart()
   if not kernel.is_running() then
     vim.notify("Jupyter: kernel not running", vim.log.levels.WARN)
@@ -264,50 +261,12 @@ function M.restart()
   end)
 end
 
-function M.manager_open()
-  local manager = require("jupyter.manager")
-  local server_url = M._last_server_url
-  if not server_url then
-    local lines = vim.fn.systemlist("jupyter server list 2>/dev/null")
-    local servers = {}
-    for _, line in ipairs(lines) do
-      local url = line:match("^(https?://%S+)%s*::")
-      if url then table.insert(servers, url) end
-    end
-    if #servers == 1 then
-      server_url = servers[1]
-    elseif #servers > 1 then
-      vim.ui.select(servers, { prompt = "Select Jupyter server:" }, function(choice)
-        if choice then
-          M._last_server_url = choice
-          manager.open(choice, M.config.python_path)
-        end
-      end)
-      return
-    else
-      vim.ui.input({ prompt = "Jupyter server URL: " }, function(input)
-        if input and input ~= "" then
-          M._last_server_url = input
-          manager.open(input, M.config.python_path)
-        end
-      end)
-      return
-    end
-  end
-  manager.open(server_url, M.config.python_path)
-end
-
 function M.statusline()
   if not kernel.is_running() then
     return ""
   end
   local id = kernel._kernel_id
   if id then
-    local manager = require("jupyter.manager")
-    local alias = manager._aliases[id]
-    if alias then
-      return "♃ " .. alias
-    end
     return "♃ " .. id:sub(1, 8)
   end
   return "♃"

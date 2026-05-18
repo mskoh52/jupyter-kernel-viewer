@@ -1,166 +1,27 @@
--- Kernel manager UI: floating window showing all kernels on a Jupyter server
+-- Floating window UI for managing Jupyter kernels via the `jkm` CLI.
 local M = {}
 
 M._win = nil
 M._buf = nil
-M._server_url = nil
-M._kernels = {}
-M._aliases = {}
-M._host = nil
-M._port = nil
-M._base_path = nil
-M._token = nil
-M._line_offset = 2  -- 0-indexed line where kernel list starts (after header lines)
+M._kernels = {}      -- list of {id=..., name=...}
+M._aliases = {}      -- kernel_id -> alias (nvim-local, persisted to JSON)
+M._server_url = nil  -- discovered from `jkm server list`
+M._line_offset = 2   -- 0-indexed line where first kernel row appears
 
 local alias_file = vim.fn.stdpath("data") .. "/jupyter_kernel_aliases.json"
 
-local uv = vim.uv or vim.loop
-
 local function load_aliases()
-  local ok, data = pcall(vim.fn.readfile, alias_file)
-  if not ok or #data == 0 then return {} end
-  local ok2, decoded = pcall(vim.fn.json_decode, table.concat(data, "\n"))
-  if ok2 and type(decoded) == "table" then return decoded end
-  return {}
+  local ok, lines = pcall(vim.fn.readfile, alias_file)
+  if not ok or not lines or #lines == 0 then return {} end
+  local ok2, decoded = pcall(vim.fn.json_decode, table.concat(lines, "\n"))
+  if not ok2 or type(decoded) ~= "table" then return {} end
+  return decoded
 end
 
-local function save_aliases(aliases)
-  local ok, encoded = pcall(vim.fn.json_encode, aliases)
-  if ok then
-    vim.fn.writefile({ encoded }, alias_file)
-  end
-end
-
-local function parse_url(url)
-  -- url like: http://localhost:8888?token=abc
-  --        or http://localhost:8888/path/?token=abc
-  local scheme, host, port_str, path, query = url:match("^(https?)://([^:/]+):?(%d*)(/?[^?]*)%??(.*)$")
-  local port = tonumber(port_str) or (scheme == "https" and 443 or 80)
-  path = path:gsub("/$", "")  -- strip trailing slash
-  local token = query:match("token=([^&]+)") or ""
-  return host, port, path, token
-end
-
-local function with_token(path)
-  if M._token ~= "" then
-    local sep = path:find("?", 1, true) and "&" or "?"
-    return path .. sep .. "token=" .. M._token
-  end
-  return path
-end
-
-local function http_request(method, path, body, callback)
-  -- callback(ok, response_body_string)
-  uv.getaddrinfo(M._host, nil, { socktype = "stream", protocol = "tcp" }, function(err, res)
-    if err or not res or #res == 0 then
-      vim.schedule(function() callback(false, err or "getaddrinfo failed") end)
-      return
-    end
-
-    local tcp = uv.new_tcp()
-    tcp:connect(res[1].addr, M._port, function(cerr)
-      if cerr then
-        vim.schedule(function() callback(false, cerr) end)
-        tcp:close()
-        return
-      end
-
-      -- Build HTTP request
-      local host_header = M._host .. ":" .. tostring(M._port)
-      local req_lines = {
-        method .. " " .. path .. " HTTP/1.1",
-        "Host: " .. host_header,
-        "Connection: close",
-      }
-      if body and body ~= "" then
-        table.insert(req_lines, "Content-Type: application/json")
-        table.insert(req_lines, "Content-Length: " .. tostring(#body))
-      end
-      table.insert(req_lines, "")
-      table.insert(req_lines, "")
-      local request = table.concat(req_lines, "\r\n")
-      if body and body ~= "" then
-        request = request .. body
-      end
-
-      tcp:write(request, function(werr)
-        if werr then
-          vim.schedule(function() callback(false, werr) end)
-          tcp:close()
-          return
-        end
-
-        local buffer = ""
-        tcp:read_start(function(rerr, data)
-          if rerr then
-            vim.schedule(function() callback(false, rerr) end)
-            tcp:close()
-            return
-          end
-
-          if data then
-            buffer = buffer .. data
-          else
-            -- EOF: close and parse
-            tcp:close()
-
-            -- Split headers from body
-            local header_end = buffer:find("\r\n\r\n")
-            if not header_end then
-              vim.schedule(function() callback(false, "malformed HTTP response") end)
-              return
-            end
-
-            local headers = buffer:sub(1, header_end - 1)
-            local resp_body = buffer:sub(header_end + 4)
-
-            -- Extract status code from first line
-            local status_code = tonumber(headers:match("^HTTP/%S+%s+(%d+)"))
-            local ok = status_code ~= nil and status_code >= 200 and status_code < 300
-
-            vim.schedule(function() callback(ok, resp_body) end)
-          end
-        end)
-      end)
-    end)
-  end)
-end
-
-local function api_list(callback)
-  http_request("GET", with_token(M._base_path .. "/api/kernels"), nil, function(ok, body)
-    if not ok then callback(false, { error = body }); return end
-    local jok, data = pcall(vim.fn.json_decode, body)
-    if jok then callback(true, { kernels = data })
-    else callback(false, { error = "bad JSON" }) end
-  end)
-end
-
-local function api_kill(id, callback)
-  http_request("DELETE", with_token(M._base_path .. "/api/kernels/" .. id), nil, function(ok, body)
-    callback(ok, ok and { type = "killed", id = id } or { error = body })
-  end)
-end
-
-local function api_start(kernel_name, callback)
-  local body = vim.fn.json_encode({ name = kernel_name })
-  http_request("POST", with_token(M._base_path .. "/api/kernels"), body, function(ok, resp_body)
-    if not ok then callback(false, { error = resp_body }); return end
-    local jok, data = pcall(vim.fn.json_decode, resp_body)
-    if jok then callback(true, { kernel = data })
-    else callback(false, { error = "bad JSON" }) end
-  end)
-end
-
-local function api_restart(id, callback)
-  http_request("POST", with_token(M._base_path .. "/api/kernels/" .. id .. "/restart"), nil, function(ok, body)
-    callback(ok, ok and { type = "restarted", id = id } or { error = body })
-  end)
-end
-
-local function api_interrupt(id, callback)
-  http_request("POST", with_token(M._base_path .. "/api/kernels/" .. id .. "/interrupt"), nil, function(ok, body)
-    callback(ok, ok and { type = "interrupted", id = id } or { error = body })
-  end)
+local function save_aliases(t)
+  local ok, encoded = pcall(vim.fn.json_encode, t)
+  if not ok then return end
+  pcall(vim.fn.writefile, { encoded }, alias_file)
 end
 
 local function setup_highlights()
@@ -171,283 +32,135 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "JupyterManagerHelp",   { link = "Comment", default = true })
 end
 
-local function render_lines(kernels, aliases, server_url)
-  local lines = {}
-  local connected_id = require("jupyter.kernel")._kernel_id
-
-  table.insert(lines, "  Server: " .. (server_url or ""))
-  table.insert(lines, "")
-
-  for i, k in ipairs(kernels) do
-    local short_id = k.id:sub(1, 8)
-    local state = k.execution_state or "unknown"
-    local alias = aliases[k.id]
-    local connected_marker = (k.id == connected_id) and "*" or " "
-    local bullet = alias and "●" or "○"
-
-    local line = string.format("  %s%d  %s %-12s [%s]",
-      connected_marker, i, bullet, k.name or "?", short_id)
-
-    if alias then
-      line = line .. '  "' .. alias .. '"'
-    end
-
-    line = line .. "  " .. state
-    table.insert(lines, line)
+local function jkm(args, callback)
+  local out, err = {}, {}
+  local cmd = { "jkm" }
+  for _, a in ipairs(args) do table.insert(cmd, a) end
+  local jid = vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      if not data then return end
+      for _, l in ipairs(data) do if l ~= "" then table.insert(out, l) end end
+    end,
+    on_stderr = function(_, data)
+      if not data then return end
+      for _, l in ipairs(data) do if l ~= "" then table.insert(err, l) end end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function() callback(code == 0, out, err) end)
+    end,
+  })
+  if jid <= 0 then
+    vim.schedule(function() callback(false, {}, { "failed to spawn jkm (is it on PATH?)" }) end)
   end
-
-  table.insert(lines, "")
-  table.insert(lines, "  [d]kill  [r]refresh  [R]restart  [i]interrupt")
-  table.insert(lines, "  [n]new   [a]alias    [Enter]connect  [q]close")
-
-  return lines
 end
 
-local function apply_highlights(buf, kernels)
-  local ns = vim.api.nvim_create_namespace("jupyter_manager_hl")
-  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-
-  -- Header line (line 0)
-  vim.api.nvim_buf_add_highlight(buf, ns, "JupyterManagerHeader", 0, 0, -1)
-
-  -- Kernel lines start at line 2 (0-indexed), i.e. M._line_offset
-  local connected_id = require("jupyter.kernel")._kernel_id
-  for i, k in ipairs(kernels) do
-    local lnum = M._line_offset + (i - 1)
-    local state = k.execution_state or ""
-    local hl = (k.id == connected_id) and "JupyterManagerHeader"
-      or (state == "busy" and "JupyterManagerBusy" or "JupyterManagerKernel")
-    vim.api.nvim_buf_add_highlight(buf, ns, hl, lnum, 0, -1)
+-- "ID (name)"
+local function parse_kernel_list(lines)
+  local r = {}
+  for _, line in ipairs(lines) do
+    local id, name = line:match("^(%S+)%s+%((.-)%)")
+    if id then table.insert(r, { id = id, name = name }) end
   end
+  return r
+end
 
-  -- Help lines at the end
-  local total_lines = vim.api.nvim_buf_line_count(buf)
-  if total_lines >= 2 then
-    vim.api.nvim_buf_add_highlight(buf, ns, "JupyterManagerHelp", total_lines - 2, 0, -1)
-    vim.api.nvim_buf_add_highlight(buf, ns, "JupyterManagerHelp", total_lines - 1, 0, -1)
+-- "URL :: root_dir"
+local function parse_server_list(lines)
+  local r = {}
+  for _, line in ipairs(lines) do
+    local url, root = line:match("^(%S+)%s*::%s*(.+)$")
+    if url then table.insert(r, { url = url, root = root }) end
   end
+  return r
+end
+
+local function current_kernel_id()
+  local ok, k = pcall(require, "jupyter.kernel")
+  if not ok then return nil end
+  return k._kernel_id
+end
+
+local function resize_window()
+  if not (M._win and vim.api.nvim_win_is_valid(M._win)) then return end
+  local h = #M._kernels + 6
+  if h < 6 then h = 6 end
+  if h > 20 then h = 20 end
+  pcall(vim.api.nvim_win_set_height, M._win, h)
 end
 
 local function redraw()
-  if not M._buf or not vim.api.nvim_buf_is_valid(M._buf) then return end
+  if not (M._buf and vim.api.nvim_buf_is_valid(M._buf)) then return end
 
-  local lines = render_lines(M._kernels, M._aliases, M._server_url)
+  local lines = {}
+  local server_line = "  Server: " .. (M._server_url or "<none>")
+  table.insert(lines, server_line)
+  table.insert(lines, "")
+
+  local cur = current_kernel_id()
+  local connected_row = nil
+
+  for i, k in ipairs(M._kernels) do
+    local marker = (cur and k.id == cur) and "*" or " "
+    local short = k.id:sub(1, 8)
+    local alias = M._aliases[k.id]
+    local state_glyph = alias and "●" or "○"
+    local idx = string.format("%2d", i)
+    local row = string.format("%s%s  %s %-12s [%s]", marker, idx, state_glyph, k.name or "", short)
+    if alias and alias ~= "" then
+      row = row .. string.format("  %q", alias)
+    end
+    if cur and k.id == cur then
+      connected_row = #lines
+    end
+    table.insert(lines, row)
+  end
+
+  table.insert(lines, "")
+  table.insert(lines, "  [d]stop  [r]refresh  [R]restart  [i]interrupt")
+  table.insert(lines, "  [n]new   [a]alias    [Enter]connect  [q]close")
 
   vim.api.nvim_buf_set_option(M._buf, "modifiable", true)
   vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
 
-  apply_highlights(M._buf, M._kernels)
-end
-
-local function refresh(callback)
-  api_list(function(ok, result)
-    vim.schedule(function()
-      if ok and result.kernels then
-        M._kernels = result.kernels
-      elseif not ok then
-        vim.notify("Jupyter manager: " .. tostring(result.error), vim.log.levels.ERROR)
-      end
-      redraw()
-      if callback then callback() end
-    end)
-  end)
-end
-
-local function get_kernel_at_cursor()
-  if not M._win or not vim.api.nvim_win_is_valid(M._win) then return nil end
-  local cursor = vim.api.nvim_win_get_cursor(M._win)
-  local lnum = cursor[1] - 1  -- 0-indexed
-  local idx = lnum - M._line_offset + 1
-  if idx >= 1 and idx <= #M._kernels then
-    return M._kernels[idx], idx
+  local ns = vim.api.nvim_create_namespace("jupyter_manager")
+  vim.api.nvim_buf_clear_namespace(M._buf, ns, 0, -1)
+  vim.api.nvim_buf_add_highlight(M._buf, ns, "JupyterManagerHeader", 0, 0, -1)
+  if connected_row then
+    vim.api.nvim_buf_add_highlight(M._buf, ns, "JupyterManagerHeader", connected_row, 0, -1)
   end
-  return nil, nil
+  local last = #lines - 1
+  vim.api.nvim_buf_add_highlight(M._buf, ns, "JupyterManagerHelp", last - 1, 0, -1)
+  vim.api.nvim_buf_add_highlight(M._buf, ns, "JupyterManagerHelp", last, 0, -1)
+
+  resize_window()
 end
 
-local function set_keymaps(buf)
-  local opts = { noremap = true, silent = true, buffer = buf }
-
-  vim.keymap.set("n", "q", function() M.close() end, opts)
-  vim.keymap.set("n", "<Esc>", function() M.close() end, opts)
-
-  vim.keymap.set("n", "r", function()
-    refresh()
-  end, opts)
-
-  vim.keymap.set("n", "d", function()
-    local k = get_kernel_at_cursor()
-    if not k then return end
-    api_kill(k.id, function(ok, result)
-      vim.schedule(function()
-        if ok then
-          -- If we just killed the connected kernel, stop the bridge
-          local bridge = require("jupyter.kernel")
-          if bridge._kernel_id == k.id then
-            bridge.stop()
-            vim.notify("Jupyter: killed connected kernel, disconnected")
-          else
-            vim.notify("Jupyter: killed kernel " .. k.id:sub(1, 8))
-          end
-          refresh()
-        else
-          vim.notify("Jupyter manager kill: " .. tostring(result.error), vim.log.levels.ERROR)
-        end
-      end)
-    end)
-  end, opts)
-
-  vim.keymap.set("n", "R", function()
-    local k = get_kernel_at_cursor()
-    if not k then return end
-    api_restart(k.id, function(ok, result)
-      vim.schedule(function()
-        if ok then
-          vim.notify("Jupyter: restarted kernel " .. k.id:sub(1, 8))
-        else
-          vim.notify("Jupyter manager restart: " .. tostring(result.error), vim.log.levels.ERROR)
-        end
-        refresh()
-      end)
-    end)
-  end, opts)
-
-  vim.keymap.set("n", "i", function()
-    local k = get_kernel_at_cursor()
-    if not k then return end
-    api_interrupt(k.id, function(ok, result)
-      vim.schedule(function()
-        if ok then
-          vim.notify("Jupyter: interrupted kernel " .. k.id:sub(1, 8))
-        else
-          vim.notify("Jupyter manager interrupt: " .. tostring(result.error), vim.log.levels.ERROR)
-        end
-        refresh()
-      end)
-    end)
-  end, opts)
-
-  vim.keymap.set("n", "n", function()
-    vim.ui.input({ prompt = "Kernel name (default: python3): " }, function(name)
-      if name == nil then return end
-      if name == "" then name = "python3" end
-      api_start(name, function(ok, result)
-        vim.schedule(function()
-          if ok then
-            local kid = result.kernel and result.kernel.id or ""
-            vim.notify("Jupyter: started new kernel " .. kid:sub(1, 8))
-          else
-            vim.notify("Jupyter manager start: " .. tostring(result.error), vim.log.levels.ERROR)
-          end
-          refresh()
-        end)
-      end)
-    end)
-  end, opts)
-
-  vim.keymap.set("n", "a", function()
-    local k = get_kernel_at_cursor()
-    if not k then return end
-    local current = M._aliases[k.id] or ""
-    vim.ui.input({ prompt = "Alias for " .. k.id:sub(1, 8) .. " (empty to clear): ", default = current }, function(alias)
-      if alias == nil then return end
-      if alias == "" then
-        M._aliases[k.id] = nil
-      else
-        M._aliases[k.id] = alias
-      end
-      save_aliases(M._aliases)
-      redraw()
-    end)
-  end, opts)
-
-  vim.keymap.set("n", "<CR>", function()
-    -- Connect to selected kernel via JupyterConnect with the server URL.
-    -- User will see the kernel selection dialog and can pick the right kernel.
-    M.close()
-    require("jupyter").connect(M._server_url)
-  end, opts)
-end
-
-function M.open(server_url, python_path)
-  M._server_url = server_url
-  M._host, M._port, M._base_path, M._token = parse_url(server_url)
-  M._aliases = load_aliases()
-
-  setup_highlights()
-
-  -- If window already open, just refresh and focus
-  if M._win and vim.api.nvim_win_is_valid(M._win) then
-    vim.api.nvim_set_current_win(M._win)
-    refresh()
-    return
-  end
-
-  -- Create buffer
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
-  vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
-  vim.api.nvim_buf_set_option(buf, "modifiable", false)
-  M._buf = buf
-
-  -- Compute window size/position (will resize after fetch)
-  local width = 60
-  local height = 10
-  local ui = vim.api.nvim_list_uis()[1]
-  local col = math.floor((ui.width - width) / 2)
-  local row = math.floor((ui.height - height) / 2)
-
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    col = col,
-    row = row,
-    style = "minimal",
-    border = "rounded",
-    title = " Jupyter Kernels ",
-    title_pos = "center",
-  })
-  M._win = win
-
-  set_keymaps(buf)
-
-  -- Auto-close when leaving the window
-  vim.api.nvim_create_autocmd("WinLeave", {
-    buffer = buf,
-    once = true,
-    callback = function()
-      M.close()
-    end,
-  })
-
-  -- Initial content while loading
-  vim.api.nvim_buf_set_option(buf, "modifiable", true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "  Server: " .. server_url, "", "  Loading kernels..." })
-  vim.api.nvim_buf_set_option(buf, "modifiable", false)
-
-  -- Fetch kernels and render
-  refresh(function()
-    -- Resize window to fit content
-    if M._win and vim.api.nvim_win_is_valid(M._win) then
-      local n = #M._kernels
-      local new_height = math.min(n + 6, 20)
-      new_height = math.max(new_height, 6)
-      local new_row = math.floor((ui.height - new_height) / 2)
-      vim.api.nvim_win_set_config(M._win, {
-        relative = "editor",
-        width = width,
-        height = new_height,
-        col = col,
-        row = new_row,
-      })
+local function refresh(cb)
+  jkm({ "kernel", "list" }, function(ok, out, err)
+    if ok then
+      M._kernels = parse_kernel_list(out)
+    else
+      vim.notify("jkm kernel list failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
     end
+    redraw()
+    if cb then cb() end
   end)
+end
+
+local function selected_kernel()
+  if not (M._win and vim.api.nvim_win_is_valid(M._win)) then return nil end
+  local row = vim.api.nvim_win_get_cursor(M._win)[1] - 1
+  local idx = row - M._line_offset + 1
+  if idx < 1 or idx > #M._kernels then return nil end
+  return M._kernels[idx]
 end
 
 function M.close()
   if M._win and vim.api.nvim_win_is_valid(M._win) then
-    vim.api.nvim_win_close(M._win, true)
+    pcall(vim.api.nvim_win_close, M._win, true)
   end
   M._win = nil
   M._buf = nil
@@ -457,16 +170,145 @@ function M.is_open()
   return M._win ~= nil and vim.api.nvim_win_is_valid(M._win)
 end
 
--- Exported for testing only
-M._testing = {
-  parse_url    = parse_url,
-  render_lines = render_lines,
-  http_request = http_request,
-  api_list     = api_list,
-  api_kill     = api_kill,
-  api_start    = api_start,
-  api_restart  = api_restart,
-  api_interrupt = api_interrupt,
-}
+local function set_keymaps()
+  local opts = { buffer = M._buf, nowait = true, silent = true, noremap = true }
+
+  vim.keymap.set("n", "q", function() M.close() end, opts)
+  vim.keymap.set("n", "<Esc>", function() M.close() end, opts)
+  vim.keymap.set("n", "r", function() refresh() end, opts)
+
+  vim.keymap.set("n", "d", function()
+    local k = selected_kernel()
+    if not k then return end
+    jkm({ "kernel", "stop", k.id }, function(ok, _, err)
+      if not ok then
+        vim.notify("jkm kernel stop failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+      else
+        local cur = current_kernel_id()
+        if cur and cur == k.id then
+          local okk, kern = pcall(require, "jupyter.kernel")
+          if okk and kern.stop then kern.stop() end
+        end
+      end
+      refresh()
+    end)
+  end, opts)
+
+  vim.keymap.set("n", "R", function()
+    local k = selected_kernel()
+    if not k then return end
+    jkm({ "kernel", "restart", k.id }, function(ok, _, err)
+      if ok then
+        vim.notify("Jupyter: kernel restarted [" .. k.id:sub(1, 8) .. "]")
+      else
+        vim.notify("jkm kernel restart failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+      end
+      refresh()
+    end)
+  end, opts)
+
+  vim.keymap.set("n", "i", function()
+    local k = selected_kernel()
+    if not k then return end
+    jkm({ "kernel", "interrupt", k.id }, function(ok, _, err)
+      if ok then
+        vim.notify("Jupyter: interrupt sent [" .. k.id:sub(1, 8) .. "]")
+      else
+        vim.notify("jkm kernel interrupt failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+      end
+      refresh()
+    end)
+  end, opts)
+
+  vim.keymap.set("n", "n", function()
+    jkm({ "kernel", "start" }, function(ok, out, err)
+      if ok then
+        vim.notify("Jupyter: " .. (out[1] or "kernel started"))
+      else
+        vim.notify("jkm kernel start failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+      end
+      refresh()
+    end)
+  end, opts)
+
+  vim.keymap.set("n", "a", function()
+    local k = selected_kernel()
+    if not k then return end
+    vim.ui.input({ prompt = "Alias for " .. k.id:sub(1, 8) .. ": ", default = M._aliases[k.id] or "" }, function(input)
+      if input == nil then return end
+      if input == "" then
+        M._aliases[k.id] = nil
+      else
+        M._aliases[k.id] = input
+      end
+      save_aliases(M._aliases)
+      redraw()
+    end)
+  end, opts)
+
+  vim.keymap.set("n", "<CR>", function()
+    local url = M._server_url
+    M.close()
+    require("jupyter").connect(url)
+  end, opts)
+end
+
+function M.open()
+  M._aliases = load_aliases()
+  setup_highlights()
+
+  if M._win and vim.api.nvim_win_is_valid(M._win) then
+    vim.api.nvim_set_current_win(M._win)
+    refresh()
+    return
+  end
+
+  jkm({ "server", "list" }, function(ok, out, err)
+    if not ok or #out == 0 then
+      vim.notify("jkm server list failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+      return
+    end
+    local servers = parse_server_list(out)
+    -- Multi-server selection intentionally out of scope; use the first server.
+    M._server_url = servers[1] and servers[1].url or nil
+
+    M._buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_option(M._buf, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(M._buf, "bufhidden", "wipe")
+    vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
+
+    local width = 60
+    local height = 6
+    local ui = vim.api.nvim_list_uis()[1] or { width = 120, height = 40 }
+    local row = math.floor((ui.height - height) / 2)
+    local col = math.floor((ui.width - width) / 2)
+
+    M._win = vim.api.nvim_open_win(M._buf, true, {
+      relative = "editor",
+      width = width,
+      height = height,
+      row = row,
+      col = col,
+      style = "minimal",
+      border = "rounded",
+      title = " Jupyter Kernels ",
+      title_pos = "center",
+    })
+
+    vim.api.nvim_buf_set_option(M._buf, "modifiable", true)
+    vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, { "  Loading..." })
+    vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
+
+    set_keymaps()
+
+    vim.api.nvim_create_autocmd("WinLeave", {
+      buffer = M._buf,
+      once = true,
+      callback = function() M.close() end,
+    })
+
+    refresh(function() resize_window() end)
+  end)
+end
 
 return M

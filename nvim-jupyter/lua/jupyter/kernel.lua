@@ -36,14 +36,6 @@ local function dispatch(msg)
     return
   end
 
-  if msg_type == "restarted" then
-    if M._on_restarted then
-      M._on_restarted(msg)
-      M._on_restarted = nil
-    end
-    return
-  end
-
   if id and M._callbacks[id] then
     M._callbacks[id](msg)
     if msg_type == "status" and msg.execution_state == "idle" then
@@ -129,16 +121,37 @@ function M.stop()
 end
 
 function M.interrupt()
-  if not M.is_running() then return end
-  vim.fn.chansend(M._job_id, vim.fn.json_encode({ type = "interrupt" }) .. "\n")
+  if not M._kernel_id then
+    vim.notify("jupyter: no kernel id known", vim.log.levels.WARN)
+    return
+  end
+  vim.fn.jobstart({ "jkm", "kernel", "interrupt", M._kernel_id }, {
+    on_exit = function(_, code, _)
+      if code ~= 0 then
+        vim.schedule(function()
+          vim.notify("jupyter: jkm interrupt failed (exit " .. tostring(code) .. ")", vim.log.levels.ERROR)
+        end)
+      end
+    end,
+  })
 end
 
 function M.restart(on_restarted)
-  if not M.is_running() then return end
-  if on_restarted then
-    M._on_restarted = on_restarted
+  if not M._kernel_id then
+    vim.notify("jupyter: no kernel id known", vim.log.levels.WARN)
+    return
   end
-  vim.fn.chansend(M._job_id, vim.fn.json_encode({ type = "restart" }) .. "\n")
+  vim.fn.jobstart({ "jkm", "kernel", "restart", M._kernel_id }, {
+    on_exit = function(_, code, _)
+      vim.schedule(function()
+        if code == 0 then
+          if on_restarted then on_restarted({ type = "restarted" }) end
+        else
+          vim.notify("jupyter: jkm restart failed (exit " .. tostring(code) .. ")", vim.log.levels.ERROR)
+        end
+      end)
+    end,
+  })
 end
 
 function M.send_raw(data)
