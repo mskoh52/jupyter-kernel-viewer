@@ -247,9 +247,10 @@ local function set_keymaps()
   end, opts)
 
   vim.keymap.set("n", "<CR>", function()
-    local url = M._server_url
+    local k = selected_kernel()
+    if not M._server_url or not k then return end
     M.close()
-    require("jupyter").connect(url)
+    require("jupyter").connect(M._server_url, k.id)
   end, opts)
 end
 

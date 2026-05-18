@@ -104,35 +104,42 @@ function M.setup(user_config)
   end, { desc = "Open Jupyter kernel manager" })
 end
 
-local function on_ready_handler(msg)
-  if msg.type == "ready" then
-    kernel._kernel_id = msg.kernel_id
-    vim.notify("Jupyter: connected" .. (msg.kernel_id and (" [" .. msg.kernel_id:sub(1,8) .. "]") or ""))
-  elseif msg.type == "kernel_list" then
-    local kernels = msg.kernels
-    local labels = vim.tbl_map(function(k)
-      local state = k.execution_state ~= "" and (" — " .. k.execution_state) or ""
-      return k.name .. " [" .. k.id:sub(1, 8) .. "]" .. state
-    end, kernels)
-    vim.ui.select(labels, { prompt = "Select kernel: " }, function(_, idx)
-      if idx then
-        kernel.send_raw(vim.fn.json_encode({ type = "select_kernel", id = kernels[idx].id }) .. "\n")
-      else
-        vim.notify("Jupyter: no kernel selected", vim.log.levels.WARN)
-        kernel.stop()
+local function make_ready_handler(preselect_kernel_id)
+  return function(msg)
+    if msg.type == "ready" then
+      kernel._kernel_id = msg.kernel_id
+      vim.notify("Jupyter: connected" .. (msg.kernel_id and (" [" .. msg.kernel_id:sub(1,8) .. "]") or ""))
+    elseif msg.type == "kernel_list" then
+      local kernels = msg.kernels
+      if preselect_kernel_id then
+        -- Auto-select the requested kernel without prompting
+        kernel.send_raw(vim.fn.json_encode({ type = "select_kernel", id = preselect_kernel_id }) .. "\n")
+        return
       end
-    end)
-  elseif msg.type == "error" then
-    vim.notify("Jupyter: " .. tostring(msg.message), vim.log.levels.ERROR)
+      local labels = vim.tbl_map(function(k)
+        local state = k.execution_state ~= "" and (" — " .. k.execution_state) or ""
+        return k.name .. " [" .. k.id:sub(1, 8) .. "]" .. state
+      end, kernels)
+      vim.ui.select(labels, { prompt = "Select kernel: " }, function(_, idx)
+        if idx then
+          kernel.send_raw(vim.fn.json_encode({ type = "select_kernel", id = kernels[idx].id }) .. "\n")
+        else
+          vim.notify("Jupyter: no kernel selected", vim.log.levels.WARN)
+          kernel.stop()
+        end
+      end)
+    elseif msg.type == "error" then
+      vim.notify("Jupyter: " .. tostring(msg.message), vim.log.levels.ERROR)
+    end
   end
 end
 
-function M.connect(arg)
+function M.connect(arg, preselect_kernel_id)
   if arg then
     kernel.start({
       connection_arg = arg,
       python_path = M.config.python_path,
-      on_ready = on_ready_handler,
+      on_ready = make_ready_handler(preselect_kernel_id),
     })
     return
   end
@@ -155,7 +162,7 @@ function M.connect(arg)
           kernel.start({
             connection_arg = input,
             python_path = M.config.python_path,
-            on_ready = on_ready_handler,
+            on_ready = make_ready_handler(nil),
           })
         end
       end)
@@ -163,7 +170,7 @@ function M.connect(arg)
       kernel.start({
         connection_arg = choice,
         python_path = M.config.python_path,
-        on_ready = on_ready_handler,
+        on_ready = make_ready_handler(nil),
       })
     end
   end)
