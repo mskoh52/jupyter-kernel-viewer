@@ -11,12 +11,15 @@ import (
 func makeServerSubcommand() *cobra.Command {
 	serverCmd := &cobra.Command{
 		Use:   "server",
-		Short: "Manage servers",
+		Short: "Manage Jupyter servers",
 	}
 
 	listCmd := &cobra.Command{
 		Use:   "list",
-		Short: "list servers",
+		Short: "List running Jupyter servers",
+		Long: `List all locally running Jupyter servers, one per line, in the form:
+
+    <URL>?token=<TOKEN> :: <ROOT_DIR>`,
 		Run: func(cmd *cobra.Command, args []string) {
 			servers, err := listServers()
 			if err != nil {
@@ -30,9 +33,14 @@ func makeServerSubcommand() *cobra.Command {
 	}
 
 	stopCmd := &cobra.Command{
-		Use:   "stop [server]",
-		Short: "stop a server, identified with a substring of url or root_dir",
-		Args:  cobra.ExactArgs(1),
+		Use:   "stop <selector>",
+		Short: "Stop a running server",
+		Long: `Stop a running Jupyter server.
+
+The selector is matched as a case-sensitive substring against each server's
+URL and root directory. Use ^ to anchor to the start or $ to anchor to the
+end of either field. The match must be unique.`,
+		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			servers, err := listServers()
 			if err != nil {
@@ -55,14 +63,15 @@ func makeServerSubcommand() *cobra.Command {
 func makeKernelSubcommand(servers []Server) *cobra.Command {
 	kernelCmd := &cobra.Command{
 		Use:   "kernel",
-		Short: "Manage kernels",
+		Short: "Manage kernels on a Jupyter server",
 	}
 	var selector string
-	kernelCmd.PersistentFlags().StringVarP(&selector, "server", "s", "", "server selector")
+	kernelCmd.PersistentFlags().StringVarP(&selector, "server", "s", "",
+		"Select server by substring of URL or root directory; ^ and $ anchor to start/end")
 
 	listCmd := &cobra.Command{
 		Use:   "list",
-		Short: "list kernels",
+		Short: "List kernels running on the server",
 		Run: func(cmd *cobra.Command, args []string) {
 			server, err := selectServer(servers, selector)
 			if err != nil {
@@ -81,9 +90,13 @@ func makeKernelSubcommand(servers []Server) *cobra.Command {
 	kernelCmd.AddCommand(listCmd)
 
 	startCmd := &cobra.Command{
-		Use:   "start",
-		Short: "start a kernel",
-		Args:  cobra.MaximumNArgs(2),
+		Use:   "start [kernel_spec] [path]",
+		Short: "Start a new kernel",
+		Long: `Start a new kernel on the selected server.
+
+  kernel_spec  Name of the kernel spec (default: server default, usually python3)
+  path         Working directory for the kernel`,
+		Args: cobra.MaximumNArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			kernelSpec := ""
 			if len(args) > 0 {
@@ -110,8 +123,8 @@ func makeKernelSubcommand(servers []Server) *cobra.Command {
 	kernelCmd.AddCommand(startCmd)
 
 	stopCmd := &cobra.Command{
-		Use:   "stop",
-		Short: "stop a kernel",
+		Use:   "stop <kernel_id>",
+		Short: "Stop a kernel",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			kernelId := args[0]
@@ -126,8 +139,8 @@ func makeKernelSubcommand(servers []Server) *cobra.Command {
 	kernelCmd.AddCommand(stopCmd)
 
 	interruptCmd := &cobra.Command{
-		Use:   "interrupt",
-		Short: "interrupt a kernel",
+		Use:   "interrupt <kernel_id>",
+		Short: "Send an interrupt signal to a running kernel",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			kernelId := args[0]
@@ -142,8 +155,8 @@ func makeKernelSubcommand(servers []Server) *cobra.Command {
 	kernelCmd.AddCommand(interruptCmd)
 
 	restartCmd := &cobra.Command{
-		Use:   "restart",
-		Short: "restart a kernel",
+		Use:   "restart <kernel_id>",
+		Short: "Restart a kernel",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			kernelId := args[0]
@@ -163,7 +176,11 @@ func makeKernelSubcommand(servers []Server) *cobra.Command {
 func main() {
 	root := &cobra.Command{
 		Use:   "jkm",
-		Short: "Jupyter Kernel Manager",
+		Short: "Manage Jupyter servers and kernels",
+		Long: `Manage local Jupyter servers and the kernels running on them.
+
+jkm discovers running servers via "jupyter server list" and exposes operations
+on their REST API. It does not start servers — use "jupyter server" for that.`,
 	}
 
 	servers, err := listServers()
