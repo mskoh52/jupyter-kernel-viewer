@@ -56,6 +56,15 @@ local function jkm(args, callback)
   end
 end
 
+local function jkm_on_server(args, callback)
+  -- jkm internally identifies servers by their base URL without query string.
+  -- Passing the full URL with ?token=... fails to match.
+  local selector = (M._server_url or ""):gsub("%?.*$", "")
+  local full = { "--server", selector }
+  for _, a in ipairs(args) do table.insert(full, a) end
+  jkm(full, callback)
+end
+
 -- "ID (name)"
 local function parse_kernel_list(lines)
   local r = {}
@@ -74,6 +83,23 @@ local function parse_server_list(lines)
     if url then table.insert(r, { url = url, root = root }) end
   end
   return r
+end
+
+local function pick_server(servers, on_pick)
+  if #servers == 0 then
+    vim.notify("Jupyter: no servers running", vim.log.levels.ERROR)
+    return
+  end
+  if #servers == 1 then
+    on_pick(servers[1])
+    return
+  end
+  local labels = vim.tbl_map(function(s)
+    return s.url .. "  ::  " .. (s.root or "")
+  end, servers)
+  vim.ui.select(labels, { prompt = "Jupyter server:" }, function(_, idx)
+    if idx then on_pick(servers[idx]) end
+  end)
 end
 
 local function current_kernel_id()
@@ -118,7 +144,7 @@ local function redraw()
   end
 
   table.insert(lines, "")
-  table.insert(lines, "  [d]stop  [r]refresh  [R]restart  [i]interrupt")
+  table.insert(lines, "  [d]stop  [r]refresh  [R]restart  [i]interrupt  [s]switch")
   table.insert(lines, "  [n]new   [a]alias    [Enter]connect  [q]close")
 
   vim.api.nvim_buf_set_option(M._buf, "modifiable", true)
@@ -139,7 +165,7 @@ local function redraw()
 end
 
 local function refresh(cb)
-  jkm({ "kernel", "list" }, function(ok, out, err)
+  jkm_on_server({ "kernel", "list" }, function(ok, out, err)
     if ok then
       M._kernels = parse_kernel_list(out)
     else
@@ -177,10 +203,28 @@ local function set_keymaps()
   vim.keymap.set("n", "<Esc>", function() M.close() end, opts)
   vim.keymap.set("n", "r", function() refresh() end, opts)
 
+  vim.keymap.set("n", "s", function()
+    jkm({ "server", "list" }, function(ok, out, err)
+      if not ok then
+        vim.schedule(function()
+          vim.notify("jkm server list failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
+        end)
+        return
+      end
+      local servers = parse_server_list(out)
+      vim.schedule(function()
+        pick_server(servers, function(s)
+          M._server_url = s.url
+          refresh()
+        end)
+      end)
+    end)
+  end, opts)
+
   vim.keymap.set("n", "d", function()
     local k = selected_kernel()
     if not k then return end
-    jkm({ "kernel", "stop", k.id }, function(ok, _, err)
+    jkm_on_server({ "kernel", "stop", k.id }, function(ok, _, err)
       if not ok then
         vim.notify("jkm kernel stop failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
       else
@@ -197,7 +241,7 @@ local function set_keymaps()
   vim.keymap.set("n", "R", function()
     local k = selected_kernel()
     if not k then return end
-    jkm({ "kernel", "restart", k.id }, function(ok, _, err)
+    jkm_on_server({ "kernel", "restart", k.id }, function(ok, _, err)
       if ok then
         vim.notify("Jupyter: kernel restarted [" .. k.id:sub(1, 8) .. "]")
       else
@@ -210,7 +254,7 @@ local function set_keymaps()
   vim.keymap.set("n", "i", function()
     local k = selected_kernel()
     if not k then return end
-    jkm({ "kernel", "interrupt", k.id }, function(ok, _, err)
+    jkm_on_server({ "kernel", "interrupt", k.id }, function(ok, _, err)
       if ok then
         vim.notify("Jupyter: interrupt sent [" .. k.id:sub(1, 8) .. "]")
       else
@@ -221,7 +265,7 @@ local function set_keymaps()
   end, opts)
 
   vim.keymap.set("n", "n", function()
-    jkm({ "kernel", "start" }, function(ok, out, err)
+    jkm_on_server({ "kernel", "start" }, function(ok, out, err)
       if ok then
         vim.notify("Jupyter: " .. (out[1] or "kernel started"))
       else
@@ -254,6 +298,45 @@ local function set_keymaps()
   end, opts)
 end
 
+local function create_window()
+  M._buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(M._buf, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(M._buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
+
+  local width = 60
+  local height = 6
+  local ui = vim.api.nvim_list_uis()[1] or { width = 120, height = 40 }
+  local row = math.floor((ui.height - height) / 2)
+  local col = math.floor((ui.width - width) / 2)
+
+  M._win = vim.api.nvim_open_win(M._buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Jupyter Kernels ",
+    title_pos = "center",
+  })
+
+  vim.api.nvim_buf_set_option(M._buf, "modifiable", true)
+  vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, { "  Loading..." })
+  vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
+
+  set_keymaps()
+
+  vim.api.nvim_create_autocmd("WinLeave", {
+    buffer = M._buf,
+    once = true,
+    callback = function() M.close() end,
+  })
+
+  refresh(function() resize_window() end)
+end
+
 function M.open()
   M._aliases = load_aliases()
   setup_highlights()
@@ -265,50 +348,15 @@ function M.open()
   end
 
   jkm({ "server", "list" }, function(ok, out, err)
-    if not ok or #out == 0 then
+    if not ok then
       vim.notify("jkm server list failed: " .. table.concat(err, " "), vim.log.levels.ERROR)
       return
     end
     local servers = parse_server_list(out)
-    -- Multi-server selection intentionally out of scope; use the first server.
-    M._server_url = servers[1] and servers[1].url or nil
-
-    M._buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_option(M._buf, "buftype", "nofile")
-    vim.api.nvim_buf_set_option(M._buf, "bufhidden", "wipe")
-    vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
-
-    local width = 60
-    local height = 6
-    local ui = vim.api.nvim_list_uis()[1] or { width = 120, height = 40 }
-    local row = math.floor((ui.height - height) / 2)
-    local col = math.floor((ui.width - width) / 2)
-
-    M._win = vim.api.nvim_open_win(M._buf, true, {
-      relative = "editor",
-      width = width,
-      height = height,
-      row = row,
-      col = col,
-      style = "minimal",
-      border = "rounded",
-      title = " Jupyter Kernels ",
-      title_pos = "center",
-    })
-
-    vim.api.nvim_buf_set_option(M._buf, "modifiable", true)
-    vim.api.nvim_buf_set_lines(M._buf, 0, -1, false, { "  Loading..." })
-    vim.api.nvim_buf_set_option(M._buf, "modifiable", false)
-
-    set_keymaps()
-
-    vim.api.nvim_create_autocmd("WinLeave", {
-      buffer = M._buf,
-      once = true,
-      callback = function() M.close() end,
-    })
-
-    refresh(function() resize_window() end)
+    pick_server(servers, function(s)
+      M._server_url = s.url
+      create_window()
+    end)
   end)
 end
 
