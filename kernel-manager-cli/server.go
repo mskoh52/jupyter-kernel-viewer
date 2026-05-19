@@ -63,7 +63,7 @@ func stopServer(servers []Server, selector string) (Server, error) {
 func selectServer(servers []Server, selector string) (Server, error) {
 	var candidates []Server
 	for _, s := range servers {
-		if strings.Contains(s.Url, selector) || strings.Contains(s.RootDir, selector) {
+		if strings.Contains("^"+s.Url+"$", selector) || strings.Contains("^"+s.RootDir+"$", selector) {
 			candidates = append(candidates, s)
 		}
 	}
